@@ -1,0 +1,19 @@
+{
+    "deploy": [
+        "../deploy.md"
+    ],
+    "docs": "",
+    "features": [
+        "BLE",
+        "USB",
+        "NeoPixel",
+        "I2S",
+        "IMU"
+    ],
+    "images": [],
+    "mcu": "nrf52",
+    "product": "KSM1",
+    "thumbnail": "",
+    "url": "",
+    "vendor": "Keysmet"
+}

@@ -1,0 +1,45 @@
+# KSM1 pin definitions
+# Format: NAME, PIN_NUMBER [, ALT_FUNC]
+# Port 0 pins: P0..P31, Port 1 pins: P32..P47 (P32 = P1.00)
+
+# NeoPixel data
+NEOPIXEL,P0
+
+# I2S audio
+I2S_LRCK,P1
+I2S_BCK,P5
+I2S_DIN,P26
+
+# I2C (IMU: LSM6DS3)
+I2C_SDA,P4
+I2C_SCL,P11
+
+# Keys (active low, internal pullup)
+K1,P22
+K2,P17
+K3,P13
+K4,P8
+K5,P6
+K6,P24
+K7,P20
+K8,P15
+K9,P41
+K10,P27
+
+# Menu button
+MENU,P42
+
+# LEDs
+PWR_LED,P7
+MENU_LED,P28
+
+# Power / status
+PWR_ON,P25
+USB_ST,P29,ADC0_IN5
+CHG,P31,ADC0_IN7
+
+# Battery level (ADC)
+BAT_LVL,P30,ADC0_IN6
+
+# Vibration motor
+VIB,P21
