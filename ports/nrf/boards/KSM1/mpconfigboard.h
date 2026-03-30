@@ -38,6 +38,9 @@
 
 #define MICROPY_HW_ENABLE_RNG       (1)
 
+// No 32.768kHz LF crystal on MDBT50Q module - use internal RC oscillator
+#define MICROPY_HW_CLK_LFCLKSRC  ((CLOCK_LFCLKSRC_SRC_RC << CLOCK_LFCLKSRC_SRC_Pos) & CLOCK_LFCLKSRC_SRC_Msk)
+
 // USB CDC REPL via native nRF52840 USB
 #define MICROPY_HW_ENABLE_USBDEV    (1)
 #define MICROPY_HW_USB_CDC          (1)

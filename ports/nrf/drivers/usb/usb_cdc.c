@@ -52,7 +52,11 @@ extern void tusb_hal_nrf_power_event(uint32_t event);
 static void board_init(void) {
     // Config clock source.
 #ifndef BLUETOOTH_SD
+#ifdef MICROPY_HW_CLK_LFCLKSRC
+    NRF_CLOCK->LFCLKSRC = MICROPY_HW_CLK_LFCLKSRC;
+#else
     NRF_CLOCK->LFCLKSRC = (uint32_t)((CLOCK_LFCLKSRC_SRC_Xtal << CLOCK_LFCLKSRC_SRC_Pos) & CLOCK_LFCLKSRC_SRC_Msk);
+#endif
     NRF_CLOCK->TASKS_LFCLKSTART = 1UL;
 #endif
 
