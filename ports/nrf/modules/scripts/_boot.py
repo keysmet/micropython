@@ -24,5 +24,5 @@ def setup_fs():
     gc.collect()
 
 
-setup_fs()
+# setup_fs()
 del setup_fs
