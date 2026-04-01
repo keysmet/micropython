@@ -227,6 +227,7 @@ SRC_NRFX += $(addprefix lib/nrfx/drivers/src/,\
 SRC_C += \
 	main.c \
 	mphalport.c \
+	modules/machine/machine_bitstream.c \
 	help.c \
 	gccollect.c \
 	pin_named_pins.c \
