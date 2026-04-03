@@ -67,3 +67,8 @@
 #define MICROPY_HW_PWM2_NAME        "PWM2"
 
 #define HELP_TEXT_BOARD_LED         "1"
+
+// Board early init: sets UICR.REGOUT0 = 3.3V on first boot so GPIO output
+// voltage is 3.3V instead of the default 1.8V. Required for SK6812 LEDs on 2.0.5.
+extern void KSM1_board_early_init(void);
+#define MICROPY_BOARD_EARLY_INIT    KSM1_board_early_init
