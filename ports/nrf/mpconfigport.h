@@ -243,6 +243,15 @@
 #define MICROPY_PY_MACHINE_PWM_INCLUDEFILE "ports/nrf/modules/machine/soft_pwm.c"
 #endif
 
+#ifndef MICROPY_PY_MACHINE_I2S
+#define MICROPY_PY_MACHINE_I2S              (0)
+#endif
+#define MICROPY_PY_MACHINE_I2S_INCLUDEFILE  "ports/nrf/modules/machine/machine_i2s.c"
+#define MICROPY_PY_MACHINE_I2S_CONSTANT_RX  (0)
+#define MICROPY_PY_MACHINE_I2S_CONSTANT_TX  (1)
+#define MICROPY_PY_MACHINE_I2S_RING_BUF     (1)
+#define MICROPY_PY_MACHINE_I2S_FINALISER    (1)
+
 #define MICROPY_PY_MACHINE_UART_INCLUDEFILE "ports/nrf/modules/machine/uart.c"
 #define MICROPY_PY_MACHINE_UART_READCHAR_WRITECHAR (1)
 
