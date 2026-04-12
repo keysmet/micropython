@@ -27,6 +27,7 @@
 // This file is never compiled standalone, it's included directly from
 // extmod/machine_i2s.c via MICROPY_PY_MACHINE_I2S_INCLUDEFILE.
 
+#include <stdlib.h>
 #include <string.h>
 #include "py/mperrno.h"
 #include "py/mphal.h"
@@ -60,18 +61,22 @@
 // -1 means "discard this byte" (padding).
 // Indices into the 8-byte DMA frame:  [0..3] = left word, [4..7] = right word.
 // Within each 32-bit word, 16-bit samples are in the high half (bytes 2,3 of the word).
+// Note: the nRF52840 I2S peripheral supports 8, 16, and 24-bit sample widths
+// only — there is no 32-bit mode.  The frame map rows for "32-bit" in the
+// extmod enum are repurposed here for 24-bit.
 static const int8_t i2s_frame_map[NUM_I2S_USER_FORMATS][I2S_RX_FRAME_SIZE_IN_BYTES] = {
     // Mono,   16-bit: pick bytes 2,3 of left word; discard rest
     { -1, -1,  0,  1, -1, -1, -1, -1 },
-    // Mono,   32-bit: pick all 4 bytes of left word; discard right word
-    {  0,  1,  2,  3, -1, -1, -1, -1 },
+    // Mono,   24-bit: pick bytes 1,2,3 of left word; discard right word
+    { -1,  0,  1,  2, -1, -1, -1, -1 },
     // Stereo, 16-bit: pick bytes 2,3 of left, bytes 6,7 of right
     { -1, -1,  0,  1, -1, -1,  2,  3 },
-    // Stereo, 32-bit: all 8 bytes
-    {  0,  1,  2,  3,  4,  5,  6,  7 },
+    // Stereo, 24-bit: bytes 1-3 of left, bytes 5-7 of right
+    { -1,  0,  1,  2, -1,  3,  4,  5 },
 };
 
 static int8_t get_frame_mapping_index(int8_t bits, format_t format) {
+    // Row 0: mono 16-bit, row 1: mono 24-bit, row 2: stereo 16-bit, row 3: stereo 24-bit
     if (format == MONO) {
         return (bits == 16) ? 0 : 1;
     } else {
@@ -218,8 +223,8 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
         self->mode != MICROPY_PY_MACHINE_I2S_CONSTANT_RX) {
         mp_raise_ValueError(MP_ERROR_TEXT("invalid mode"));
     }
-    if (self->bits != 16 && self->bits != 32) {
-        mp_raise_ValueError(MP_ERROR_TEXT("bits must be 16 or 32"));
+    if (self->bits != 16 && self->bits != 24) {
+        mp_raise_ValueError(MP_ERROR_TEXT("bits must be 16 or 24"));
     }
     if (self->ibuf <= 0) {
         mp_raise_ValueError(MP_ERROR_TEXT("ibuf must be > 0"));
@@ -263,7 +268,7 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
         .mode         = NRF_I2S_MODE_MASTER,
         .format       = NRF_I2S_FORMAT_I2S,
         .alignment    = NRF_I2S_ALIGN_LEFT,
-        .sample_width = (self->bits == 16) ? NRF_I2S_SWIDTH_16BIT : NRF_I2S_SWIDTH_32BIT,
+        .sample_width = (self->bits == 16) ? NRF_I2S_SWIDTH_16BIT : NRF_I2S_SWIDTH_24BIT,
         .channels     = (self->format == STEREO)
                             ? NRF_I2S_CHANNELS_STEREO : NRF_I2S_CHANNELS_LEFT,
         .mck_setup    = mck_setup,

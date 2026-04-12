@@ -27,6 +27,9 @@
 // qstrs specific to this port
 // *FORMAT-OFF*
 
+// Needed to avoid collision between machine_i2s.c (C qstr) and frozen asyncio/neopixel (frozen qstr)
+Q(buf)
+
 // Entries for sys.path
 Q(/flash)
 Q(/flash/lib)
