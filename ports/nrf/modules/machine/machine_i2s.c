@@ -133,6 +133,7 @@ typedef struct _machine_i2s_obj_t {
     // We keep both buffers here and let nrfx tell us which one it just
     // finished with via the p_released pointer in the data handler.
     uint32_t dma_buf[2][I2S_DMA_WORDS];
+    bool initialized;
 } machine_i2s_obj_t;
 
 static machine_i2s_obj_t machine_i2s_obj[MACHINE_I2S_NUM_INSTANCES];
@@ -210,6 +211,16 @@ static machine_i2s_obj_t *mp_machine_i2s_make_new_instance(mp_int_t i2s_id) {
 }
 
 static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *args) {
+    // Uninit first if we're being re-initialized (e.g. second call from REPL).
+    if (self->initialized) {
+        nrfx_i2s_uninit();
+        self->initialized = false;
+        if (self->ring_buffer_storage != NULL) {
+            m_free(self->ring_buffer_storage);
+            self->ring_buffer_storage = NULL;
+        }
+    }
+
     self->sck    = mp_hal_get_pin_obj(args[ARG_sck].u_obj);
     self->ws     = mp_hal_get_pin_obj(args[ARG_ws].u_obj);
     self->sd     = mp_hal_get_pin_obj(args[ARG_sd].u_obj);
@@ -280,6 +291,7 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
         mp_raise_msg_varg(&mp_type_OSError,
             MP_ERROR_TEXT("nrfx_i2s_init failed (%d)"), (int)err);
     }
+    self->initialized = true;
 
     // Start with the first DMA buffer.  nrfx will immediately fire the
     // handler asking for the second one.
@@ -299,8 +311,11 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
 }
 
 static void mp_machine_i2s_deinit(machine_i2s_obj_t *self) {
-    // nrfx_i2s_uninit() internally calls nrfx_i2s_stop().
-    nrfx_i2s_uninit();
+    if (self->initialized) {
+        // nrfx_i2s_uninit() internally calls nrfx_i2s_stop().
+        nrfx_i2s_uninit();
+        self->initialized = false;
+    }
     if (self->ring_buffer_storage != NULL) {
         m_free(self->ring_buffer_storage);
         self->ring_buffer_storage = NULL;
