@@ -72,3 +72,6 @@
 // voltage is 3.3V instead of the default 1.8V. Required for SK6812 LEDs on 2.0.5.
 extern void KSM1_board_early_init(void);
 #define MICROPY_BOARD_EARLY_INIT    KSM1_board_early_init
+
+extern void KSM1_board_enter_bootloader(void);
+#define MICROPY_BOARD_ENTER_BOOTLOADER(nargs, args) KSM1_board_enter_bootloader()
