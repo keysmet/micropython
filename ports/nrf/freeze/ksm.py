@@ -32,7 +32,6 @@ _KEY_COUNT = len(_KEY_PINS)
 
 _pins    = [Pin(p, Pin.IN, Pin.PULL_UP) for p in _KEY_PINS]
 _state   = array.array('b', [0] * _KEY_COUNT)
-_prev    = array.array('b', [0] * _KEY_COUNT)
 _press   = array.array('b', [0] * _KEY_COUNT)
 _hold_ms = array.array('l', [0] * _KEY_COUNT)
 
@@ -48,7 +47,7 @@ def _scan_keys(timer):
     now = time.ticks_ms()
     for i in range(_KEY_COUNT):
         curr = 1 if _pins[i].value() == 0 else 0
-        if curr == 1 and _prev[i] == 0:
+        if curr == 1 and _state[i] == 0:  # rising edge: check _state before updating it
             _press[i]   = 1
             _hold_ms[i] = now
             # Triple-press detection on MENU
@@ -61,7 +60,6 @@ def _scan_keys(timer):
                 if _menu_press_count[0] >= 3:
                     _menu_triple[0] = 1
                     _menu_press_count[0] = 0
-        _prev[i]  = _state[i]
         _state[i] = curr
     # Power off: MENU held 2s → reset (POWER flag pre-written by main.py)
     if _state[KEY_MENU] and time.ticks_diff(now, _hold_ms[KEY_MENU]) >= 2000:
@@ -72,6 +70,37 @@ def start():
     global _timer_keys
     _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_scan_keys)
     _timer_keys.start()
+
+# ── Scheduled callbacks ────────────────────────────────────────────────────────
+_scheduled = []
+
+def after(ms, fn):
+    """Schedule fn() once after ms milliseconds (fired from tick())."""
+    _scheduled.append([time.ticks_add(time.ticks_ms(), ms), fn])
+
+def tick():
+    """Process pending callbacks and yield 10 ms. Always returns True.
+
+    Use in loops to allow scheduled callbacks to fire while waiting:
+        while ksm.tick():
+            if key_press(KEY_K1): break
+    """
+    now = time.ticks_ms()
+    i = 0
+    while i < len(_scheduled):
+        if time.ticks_diff(now, _scheduled[i][0]) >= 0:
+            fn = _scheduled.pop(i)[1]
+            fn()
+        else:
+            i += 1
+    time.sleep_ms(10)
+    return True
+
+def sleep(ms):
+    """Sleep ms milliseconds while firing tick() callbacks."""
+    deadline = time.ticks_add(time.ticks_ms(), ms)
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        tick()
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
@@ -107,4 +136,5 @@ __all__ = [
     'NB_LEDS', 'np', 'clear_all',
     'KEY_MENU', 'KEY_K1', 'KEY_K10',
     'key_press', 'key_down', 'key_hold', 'menu_triple_press',
+    'tick', 'after', 'sleep',
 ]

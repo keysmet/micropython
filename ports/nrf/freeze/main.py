@@ -1,7 +1,6 @@
 from machine import Pin, I2C
 import time
 import machine
-import uos
 import ksm
 
 # ── Power ──────────────────────────────────────────────────────────────────────
@@ -22,20 +21,15 @@ EEPROM_MODE_ADDR  = 0x0001
 EEPROM_POWER_OFF  = 0xDE
 EEPROM_MODE_MENU  = 0x00
 EEPROM_MODE_USER  = 0x01
-EEPROM_PAGE_SIZE  = 64
 
-def _i2c():
-    return I2C(0, scl=Pin(11), sda=Pin(4))
+_i2c = I2C(0, scl=Pin(11), sda=Pin(4))
 
 def _eeprom_read_raw(addr, n=1):
-    i2c = _i2c()
-    i2c.writeto(EEPROM_ADDR, bytes([addr >> 8, addr & 0xFF]))
-    return i2c.readfrom(EEPROM_ADDR, n)
+    _i2c.writeto(EEPROM_ADDR, bytes([addr >> 8, addr & 0xFF]))
+    return _i2c.readfrom(EEPROM_ADDR, n)
 
 def _eeprom_write_raw(addr, data):
-    """Write up to 64 bytes, page-aligned. Waits for write cycle."""
-    i2c = _i2c()
-    i2c.writeto(EEPROM_ADDR, bytes([addr >> 8, addr & 0xFF]) + bytes(data))
+    _i2c.writeto(EEPROM_ADDR, bytes([addr >> 8, addr & 0xFF]) + bytes(data))
     time.sleep_ms(10)
 
 def _eeprom_read_mode():
@@ -55,16 +49,39 @@ def _eeprom_write_mode(mode):
 def _sleep_loop():
     ksm.clear_all()
     menu = Pin(42, Pin.IN, Pin.PULL_UP)
-    prev = menu.value()
-    while True:
-        curr = menu.value()
-        if curr == 0 and prev == 1:
-            time.sleep_ms(50)  # debounce
-            if menu.value() == 0:
+
+    # ── Wake-up path ───────────────────────────────────────────────────────────
+    # After System OFF, the board does a cold boot. main.py sees POWER=0xDE and
+    # enters here. If MENU is already pressed, we just woke from sleep.
+    # Require a 2s hold to confirm — show a green progress bar on the LEDs.
+    # If released before 2s, fall through and go back to System OFF.
+    if menu.value() == 0:
+        _WAKE_HOLD_MS = 2000
+        start = time.ticks_ms()
+        while menu.value() == 0:
+            elapsed = time.ticks_diff(time.ticks_ms(), start)
+            if elapsed >= _WAKE_HOLD_MS:
+                ksm.clear_all()
                 _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([0x00]))
                 machine.reset()
-        prev = curr
-        time.sleep_ms(20)
+            n = elapsed * ksm.NB_LEDS // _WAKE_HOLD_MS
+            for i in range(ksm.NB_LEDS):
+                ksm.np[i] = (0, 20, 0) if i < n else (0, 0, 0)
+            ksm.np.write()
+            time.sleep_ms(20)
+        ksm.clear_all()  # released before 2s — go back to sleep
+
+    # ── System OFF ─────────────────────────────────────────────────────────────
+    # Configure MENU pin (P1.10) to wake the chip on low level.
+    # PIN_CNF[10] on port 1 (addr 0x50000A28):
+    #   bits [3:2] = 11 (pull-up), bits [17:16] = 11 (sense low) → 0x0003000C
+    machine.mem32[0x50000A28] = 0x0003000C
+    # Clear port-1 LATCH — stale DETECT can prevent entering System OFF
+    machine.mem32[0x50000820] = 0xFFFFFFFF
+    # Cut external power (EEPROM, IMU) before sleeping
+    Pin(25, Pin.OUT).value(0)
+    # Enter System OFF (~0.4µA). Cold boot on MENU press. Never returns.
+    machine.mem32[0x40000500] = 1
 
 try:
     if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
@@ -173,8 +190,11 @@ while True:
             print("loop() error:", e)
             _loop = None  # stop calling after crash
 
+    ksm.tick()  # fire after() callbacks + 10ms yield
+
     # Triple-press MENU → switch to MENU mode
     if ksm.menu_triple_press():
         print("Switching to MENU mode...")
         _eeprom_write_mode(EEPROM_MODE_MENU)
+        _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([0x00]))  # don't enter sleep on reboot
         machine.reset()

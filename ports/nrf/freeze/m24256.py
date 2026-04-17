@@ -41,9 +41,7 @@ class M24256:
     def readblocks(self, block, buf, offset=0):
         """Read len(buf) bytes from block+offset into buf."""
         byte_addr = block * BLOCK_SIZE + offset
-        data = self._read(byte_addr, len(buf))
-        for i in range(len(buf)):
-            buf[i] = data[i]
+        buf[:] = self._read(byte_addr, len(buf))
 
     def writeblocks(self, block, buf, offset=0):
         """Write buf to block+offset, splitting at 64-byte page boundaries."""
