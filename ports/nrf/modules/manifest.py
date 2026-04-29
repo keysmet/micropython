@@ -1,4 +1,5 @@
 module("_boot.py", base_path="$(PORT_DIR)/modules/scripts", opt=3)
+module("pins.py",  base_path="$(PORT_DIR)/freeze", opt=3)
 module("m24256.py", base_path="$(PORT_DIR)/freeze", opt=3)
 module("ksm.py",   base_path="$(PORT_DIR)/freeze", opt=3)
 module("main.py",  base_path="$(PORT_DIR)/freeze", opt=3)

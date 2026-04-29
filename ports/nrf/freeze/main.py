@@ -1,10 +1,11 @@
 from machine import Pin, I2C
+import os
 import time
 import machine
 import ksm
 
 # ── Power ──────────────────────────────────────────────────────────────────────
-Pin(25, Pin.OUT).value(1)
+Pin(ksm.PIN_PWR_ON, Pin.OUT).value(1)
 time.sleep_ms(500)
 
 # ── EEPROM raw flags ───────────────────────────────────────────────────────────
@@ -18,11 +19,11 @@ time.sleep_ms(500)
 EEPROM_ADDR       = 0x50
 EEPROM_POWER_ADDR = 0x0000
 EEPROM_MODE_ADDR  = 0x0001
-EEPROM_POWER_OFF  = 0xDE
+EEPROM_POWER_OFF  = 0xDE  # arbitrary sentinel: non-zero (≠ on) and non-0xFF (≠ blank EEPROM)
 EEPROM_MODE_MENU  = 0x00
 EEPROM_MODE_USER  = 0x01
 
-_i2c = I2C(0, scl=Pin(11), sda=Pin(4))
+_i2c = I2C(0, scl=Pin(ksm.PIN_I2C_SCL), sda=Pin(ksm.PIN_I2C_SDA))
 
 def _eeprom_read_raw(addr, n=1):
     _i2c.writeto(EEPROM_ADDR, bytes([addr >> 8, addr & 0xFF]))
@@ -47,8 +48,14 @@ def _eeprom_write_mode(mode):
 # Note: ksm.start() has NOT been called yet — no Timer running here.
 
 def _sleep_loop():
+    # nRF52840 register addresses for System OFF (same names as nRF5 SDK)
+    NRF_P1_PIN_CNF_MENU       = 0x50000A28  # GPIO P1 PIN_CNF[10] — config for P1.10 (MENU)
+    NRF_P1_LATCH              = 0x50000820  # GPIO P1 LATCH — clear to avoid stale DETECT
+    NRF_POWER_SYSTEMOFF       = 0x40000500  # POWER.SYSTEMOFF — write 1 to enter System OFF
+    NRF_PIN_CNF_PULLUP_SENSE_LOW = 0x0003000C  # bits[3:2]=11 (pull-up), bits[17:16]=11 (sense low)
+
     ksm.clear_all()
-    menu = Pin(42, Pin.IN, Pin.PULL_UP)
+    menu = Pin(ksm.PIN_MENU, Pin.IN, Pin.PULL_UP)
 
     # ── Wake-up path ───────────────────────────────────────────────────────────
     # After System OFF, the board does a cold boot. main.py sees POWER=0xDE and
@@ -73,15 +80,13 @@ def _sleep_loop():
 
     # ── System OFF ─────────────────────────────────────────────────────────────
     # Configure MENU pin (P1.10) to wake the chip on low level.
-    # PIN_CNF[10] on port 1 (addr 0x50000A28):
-    #   bits [3:2] = 11 (pull-up), bits [17:16] = 11 (sense low) → 0x0003000C
-    machine.mem32[0x50000A28] = 0x0003000C
+    machine.mem32[NRF_P1_PIN_CNF_MENU] = NRF_PIN_CNF_PULLUP_SENSE_LOW
     # Clear port-1 LATCH — stale DETECT can prevent entering System OFF
-    machine.mem32[0x50000820] = 0xFFFFFFFF
+    machine.mem32[NRF_P1_LATCH] = 0xFFFFFFFF
     # Cut external power (EEPROM, IMU) before sleeping
-    Pin(25, Pin.OUT).value(0)
+    Pin(ksm.PIN_PWR_ON, Pin.OUT).value(0)
     # Enter System OFF (~0.4µA). Cold boot on MENU press. Never returns.
-    machine.mem32[0x40000500] = 1
+    machine.mem32[NRF_POWER_SYSTEMOFF] = 1
 
 try:
     if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
@@ -153,20 +158,25 @@ if _mode == EEPROM_MODE_MENU:
 # exec() runs the script in an isolated namespace.
 # The script accesses the KSM API via: from ksm import *
 
-_setup = None
-_loop  = None
+_setup     = None
+_loop      = None
+_app_mtime = 0
 
-try:
-    _src = open('/eeprom/app.py').read()
-    _ns  = {}
-    exec(_src, _ns)
-    _setup = _ns.get('setup')
-    _loop  = _ns.get('loop')
-except OSError:
-    print("No app.py on /eeprom/. Upload one with:")
-    print("  mpremote connect <PORT> cp app.py :/eeprom/app.py")
-except Exception as e:
-    print("app load error:", e)
+def _load_app():
+    global _setup, _loop, _app_mtime
+    try:
+        _app_mtime = os.stat('/eeprom/app.py')[8]
+        _ns = {}
+        exec(open('/eeprom/app.py').read(), _ns)
+        _setup = _ns.get('setup')
+        _loop  = _ns.get('loop')
+    except OSError:
+        print("No app.py on /eeprom/. Upload one with:")
+        print("  mpremote connect <PORT> cp app.py :/eeprom/app.py")
+    except Exception as e:
+        print("app load error:", e)
+
+_load_app()
 
 if _setup:
     try:
@@ -175,12 +185,16 @@ if _setup:
         print("setup() error:", e)
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
-# Pre-write POWER flag now. If MENU is held 2s (in Timer callback),
-# machine.reset() fires and the next boot finds the flag → enters _sleep_loop().
-# On clean wake (MENU press in _sleep_loop), flag is cleared before rebooting.
-_eeprom_write_raw(EEPROM_POWER_ADDR, bytes([EEPROM_POWER_OFF]))
+# Pre-write POWER flag so MENU 2s-hold sleep works on battery.
+# Skipped when USB is connected (USBDETECTED=1) so Ctrl+D in Thonny doesn't
+# trigger the sleep loop — the flag stays 0x00 and soft reset boots normally.
+_NRF_POWER_USBDETECTED = 0x4000039C  # 1 = USB present
+if not machine.mem32[_NRF_POWER_USBDETECTED]:
+    _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([EEPROM_POWER_OFF]))
 
 print("Running." if _loop else "Waiting for app.")
+
+_check_t = 0
 
 while True:
     if _loop:
@@ -191,6 +205,20 @@ while True:
             _loop = None  # stop calling after crash
 
     ksm.tick()  # fire after() callbacks + 10ms yield
+
+    # File watcher: reload app.py if mtime changed (~1s polling)
+    _check_t += 1
+    if _check_t >= 100:
+        _check_t = 0
+        try:
+            if os.stat('/eeprom/app.py')[8] != _app_mtime:
+                print("app.py changed — reloading...")
+                ksm.clear_all()
+                _load_app()
+                if _setup:
+                    _setup()
+        except OSError:
+            pass
 
     # Triple-press MENU → switch to MENU mode
     if ksm.menu_triple_press():

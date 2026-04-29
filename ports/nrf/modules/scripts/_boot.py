@@ -40,12 +40,14 @@ def setup_eeprom_fs():
         from machine import I2C, Pin
         from m24256 import M24256, OffsetBlockDev
 
-        pwr = Pin(25, Pin.OUT)
+        from pins import PIN_PWR_ON, PIN_I2C_SCL, PIN_I2C_SDA
+
+        pwr = Pin(PIN_PWR_ON, Pin.OUT)
         if not pwr.value():
             pwr.value(1)
             time.sleep_ms(100)  # EEPROM power-on settling time
 
-        bdev = M24256(I2C(0, scl=Pin(11), sda=Pin(4)))
+        bdev = M24256(I2C(0, scl=Pin(PIN_I2C_SCL), sda=Pin(PIN_I2C_SDA)))
         fs   = OffsetBlockDev(bdev, start_block=2)
         try:
             vfs.mount(vfs.VfsLfs2(fs), "/eeprom")

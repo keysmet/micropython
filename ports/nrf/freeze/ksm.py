@@ -10,16 +10,34 @@ from machine import Pin, Timer
 from neopixel import NeoPixel
 import array, time, machine
 
+# ── Pin constants ──────────────────────────────────────────────────────────────
+from pins import *
+
 # ── NeoPixels ──────────────────────────────────────────────────────────────────
 # change to 11 if led MENU is present
 NB_LEDS = 10
-np = NeoPixel(Pin(0), NB_LEDS)
+np     = NeoPixel(Pin(PIN_LED), NB_LEDS)
+_dirty = False
+
+def set_color(i, color):
+    """Set LED i to color (r, g, b). Written to hardware on next tick() or sleep()."""
+    global _dirty
+    np[i] = color
+    _dirty = True
+
+def _flush():
+    global _dirty
+    if _dirty:
+        np.write()
+        _dirty = False
 
 def clear_all():
-    """Turn off all LEDs."""
+    """Turn off all LEDs immediately."""
+    global _dirty
     for i in range(NB_LEDS):
         np[i] = (0, 0, 0)
     np.write()
+    _dirty = False
 
 # ── Key constants ──────────────────────────────────────────────────────────────
 KEY_MENU = 0
@@ -27,7 +45,8 @@ KEY_K1   = 1
 KEY_K10  = 10
 
 # ── Key scanner (internal state — do not use directly) ─────────────────────────
-_KEY_PINS = [42, 22, 17, 13, 8, 6, 24, 20, 15, 41, 27]
+_KEY_PINS = [PIN_MENU, PIN_K1, PIN_K2, PIN_K3, PIN_K4, PIN_K5,
+             PIN_K6,  PIN_K7, PIN_K8, PIN_K9, PIN_K10]
 _KEY_COUNT = len(_KEY_PINS)
 
 _pins    = [Pin(p, Pin.IN, Pin.PULL_UP) for p in _KEY_PINS]
@@ -93,6 +112,7 @@ def tick():
             fn()
         else:
             i += 1
+    _flush()
     time.sleep_ms(10)
     return True
 
@@ -133,7 +153,7 @@ def menu_triple_press():
 # Controls what 'from ksm import *' pulls in.
 # Private names (_scan_keys, _state, etc.) are excluded automatically.
 __all__ = [
-    'NB_LEDS', 'np', 'clear_all',
+    'NB_LEDS', 'clear_all', 'set_color',
     'KEY_MENU', 'KEY_K1', 'KEY_K10',
     'key_press', 'key_down', 'key_hold', 'menu_triple_press',
     'tick', 'after', 'sleep',
