@@ -31,6 +31,14 @@ mergeInto(LibraryManager.library, {
     mp_js_ticks_ms: () => Date.now() - MP_JS_EPOCH,
 
     mp_js_hook: () => {
+        if (!ENVIRONMENT_IS_NODE) {
+            const deadline = globalThis._mpWatchdogDeadline;
+            if (deadline && Date.now() > deadline) {
+                globalThis._mpWatchdogDeadline = 0;
+                Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
+            }
+            return;
+        }
         if (ENVIRONMENT_IS_NODE) {
             const mp_interrupt_char = Module.ccall(
                 "mp_hal_get_interrupt_char",
