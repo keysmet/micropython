@@ -49,7 +49,7 @@ void mp_hal_delay_ms(mp_uint_t ms) {
     while (mp_hal_ticks_ms() - start < ms) {
         uint32_t remaining = ms - (mp_hal_ticks_ms() - start);
         emscripten_sleep(remaining < 20 ? remaining : 20);
-        mp_js_hook();
+        mp_js_extend_watchdog();
         mp_handle_pending(true);
     }
     #else

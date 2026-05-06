@@ -35,10 +35,10 @@ mergeInto(LibraryManager.library, {
             if (globalThis._mpInterruptRequest) {
                 globalThis._mpInterruptRequest = false;
                 Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
+                return;
             }
-            const deadline = globalThis._mpWatchdogDeadline;
-            if (deadline && Date.now() > deadline) {
-                globalThis._mpWatchdogDeadline = 0;
+            if (++globalThis._mpHookCount > 50000) {
+                globalThis._mpHookCount = 0;
                 Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
             }
             return;
@@ -73,6 +73,14 @@ mergeInto(LibraryManager.library, {
                     throw e;
                 }
             }
+        }
+    },
+
+    mp_js_extend_watchdog: () => {
+        globalThis._mpHookCount = 0;
+        if (globalThis._mpInterruptRequest) {
+            globalThis._mpInterruptRequest = false;
+            Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
         }
     },
 
