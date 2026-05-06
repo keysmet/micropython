@@ -26,7 +26,11 @@
 
 #include <unistd.h>
 #include "py/mphal.h"
+#include "py/runtime.h"
 #include "library.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 static void stderr_print_strn(void *env, const char *str, size_t len) {
     (void)env;
@@ -40,9 +44,19 @@ mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
 }
 
 void mp_hal_delay_ms(mp_uint_t ms) {
+    #ifdef __EMSCRIPTEN__
+    uint32_t start = mp_hal_ticks_ms();
+    while (mp_hal_ticks_ms() - start < ms) {
+        uint32_t remaining = ms - (mp_hal_ticks_ms() - start);
+        emscripten_sleep(remaining < 20 ? remaining : 20);
+        mp_js_hook();
+        mp_handle_pending(true);
+    }
+    #else
     uint32_t start = mp_hal_ticks_ms();
     while (mp_hal_ticks_ms() - start < ms) {
     }
+    #endif
 }
 
 void mp_hal_delay_us(mp_uint_t us) {

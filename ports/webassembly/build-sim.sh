@@ -1,8 +1,26 @@
 #!/bin/bash
-# Rebuild MicroPython WASM (standard variant) and copy to ksm-launch.
-# Run from ports/webassembly/: bash build-sim.sh
+# Rebuild MicroPython WASM (standard variant) and copy to ksm-mpy-web.
+# Run from ports/webassembly/ in WSL: bash build-sim.sh
 
 set -e
-make VARIANT=standard
-cp build-standard/micropython.mjs build-standard/micropython.wasm ../../../ksm-launch/public/mp/
-echo "Done — WASM copied to ksm-launch/public/mp/"
+
+EMSDK="$(realpath ../../../emsdk)"
+MPY_CROSS="$(realpath ../../mpy-cross)"
+OUT="$(realpath ../../../ksm-mpy-web/public/mp)"
+
+# Activate Emscripten
+source "$EMSDK/emsdk_env.sh"
+
+# Build mpy-cross if missing
+if [ ! -f "$MPY_CROSS/mpy-cross" ]; then
+    echo "Building mpy-cross..."
+    make -C "$MPY_CROSS" -j$(nproc)
+fi
+
+# Build WASM
+make VARIANT=standard -j$(nproc)
+
+# Copy output
+mkdir -p "$OUT"
+cp build-standard/micropython.mjs build-standard/micropython.wasm "$OUT/"
+echo "Done — WASM copied to $OUT"

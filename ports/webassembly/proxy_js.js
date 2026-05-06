@@ -287,6 +287,7 @@ function proxy_convert_mp_to_js_obj_jsside(value) {
             obj = (...args) => {
                 return proxy_call_python(id, args);
             };
+            obj._pyRef = id;
             obj._ref = id;
         } else if (kind === PROXY_KIND_MP_GENERATOR) {
             obj = new PyProxyThenable(id);

@@ -20,9 +20,10 @@ np     = NeoPixel(Pin(PIN_LED), NB_LEDS)
 _dirty = False
 
 def set_color(i, color):
-    """Set LED i to color (r, g, b). Written to hardware on next tick() or sleep()."""
+    """Set LED i to color (r, g, b). i=0 is menu, i=1..10 are K1..K10."""
     global _dirty
-    np[i] = color
+    if i == 0: return  # menu LED not yet on strip
+    np[NB_LEDS - i] = color  # strip is wired K10→K1, so invert
     _dirty = True
 
 def _flush():

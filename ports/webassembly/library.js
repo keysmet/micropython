@@ -32,6 +32,10 @@ mergeInto(LibraryManager.library, {
 
     mp_js_hook: () => {
         if (!ENVIRONMENT_IS_NODE) {
+            if (globalThis._mpInterruptRequest) {
+                globalThis._mpInterruptRequest = false;
+                Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
+            }
             const deadline = globalThis._mpWatchdogDeadline;
             if (deadline && Date.now() > deadline) {
                 globalThis._mpWatchdogDeadline = 0;
