@@ -30,18 +30,21 @@ mergeInto(LibraryManager.library, {
 
     mp_js_ticks_ms: () => Date.now() - MP_JS_EPOCH,
 
+    // Returns 1 if a keyboard interrupt should be raised, 0 otherwise.
+    // Callers in C (VM hook, mphalport.c) are responsible for calling
+    // mp_sched_keyboard_interrupt() + mp_handle_pending() on a non-zero return.
+    // No JS→C calls here to avoid ASYNCIFY re-entrancy issues.
     mp_js_hook: () => {
         if (!ENVIRONMENT_IS_NODE) {
             if (globalThis._mpInterruptRequest) {
                 globalThis._mpInterruptRequest = false;
-                Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
-                return;
+                return 1;
             }
-            if (++globalThis._mpHookCount > 50000) {
+            if (++globalThis._mpHookCount > 100000) {
                 globalThis._mpHookCount = 0;
-                Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
+                return 1;
             }
-            return;
+            return 0;
         }
         if (ENVIRONMENT_IS_NODE) {
             const mp_interrupt_char = Module.ccall(
@@ -74,14 +77,13 @@ mergeInto(LibraryManager.library, {
                 }
             }
         }
+        return 0;
     },
 
+    // Called from mphalport.c after each emscripten_sleep chunk.
+    // Resets the watchdog counter so legitimate sleep() calls are never flagged.
     mp_js_extend_watchdog: () => {
         globalThis._mpHookCount = 0;
-        if (globalThis._mpInterruptRequest) {
-            globalThis._mpInterruptRequest = false;
-            Module.ccall("mp_sched_keyboard_interrupt", "null", [], []);
-        }
     },
 
     mp_js_time_ms: () => Date.now(),

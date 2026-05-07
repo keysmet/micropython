@@ -50,6 +50,9 @@ void mp_hal_delay_ms(mp_uint_t ms) {
         uint32_t remaining = ms - (mp_hal_ticks_ms() - start);
         emscripten_sleep(remaining < 20 ? remaining : 20);
         mp_js_extend_watchdog();
+        if (mp_js_hook()) {
+            mp_sched_keyboard_interrupt();
+        }
         mp_handle_pending(true);
     }
     #else

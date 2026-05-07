@@ -85,8 +85,12 @@
 #define MICROPY_VM_HOOK_INIT static uint vm_hook_divisor = MICROPY_VM_HOOK_COUNT;
 #define MICROPY_VM_HOOK_POLL if (--vm_hook_divisor == 0) { \
         vm_hook_divisor = MICROPY_VM_HOOK_COUNT; \
-        extern void mp_js_hook(void); \
-        mp_js_hook(); \
+        extern int mp_js_hook(void); \
+        if (mp_js_hook()) { \
+            extern void mp_sched_keyboard_interrupt(void); \
+            mp_sched_keyboard_interrupt(); \
+            mp_handle_pending(1); \
+        } \
 }
 #define MICROPY_VM_HOOK_LOOP MICROPY_VM_HOOK_POLL
 #define MICROPY_VM_HOOK_RETURN MICROPY_VM_HOOK_POLL
