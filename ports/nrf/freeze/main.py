@@ -88,6 +88,10 @@ def _sleep_loop():
     # Enter System OFF (~0.4µA). Cold boot on MENU press. Never returns.
     machine.mem32[NRF_POWER_SYSTEMOFF] = 1
 
+_usb = bool(machine.mem32[0x40000438] & 1)  # nRF POWER.USBREGSTATUS.VBUSDETECT
+
+# Enter sleep if the flag was written by the MENU 2s hold (battery or USB).
+# On upload, the flag is never pre-armed so this is always skipped.
 try:
     if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
         _sleep_loop()
@@ -99,33 +103,40 @@ except Exception:
 # because it would trigger a reset on 2s MENU hold, keeping the board in sleep.
 ksm.start()
 
+# Register the sleep flag write so it fires only on the MENU 2s hold reset,
+# not on upload soft resets or any other reset.
+ksm._pre_reset_hooks.append(
+    lambda: _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([EEPROM_POWER_OFF]))
+)
+
 # /eeprom is mounted by _boot.py on every boot/soft-reset, before main.py runs.
 
 # ── Boot animation + safety window ────────────────────────────────────────────
-# The boot animation (~480ms) and safety window (~1500ms) together give ~2s
-# to triple-press MENU before the user script loads.
-# This is the only way to escape a broken script (crash-on-boot, infinite loop).
-for _ in range(3):
-    for i in range(ksm.NB_LEDS):
-        ksm.np[i] = (0, 255, 0)
-    ksm.np.write()
-    time.sleep_ms(80)
-    ksm.clear_all()
-    time.sleep_ms(80)
-
-# Safety window: dim blue pulse, triple-press MENU → force MENU mode
-_deadline = time.ticks_ms() + 1500
-while time.ticks_diff(_deadline, time.ticks_ms()) > 0:
-    _rem    = time.ticks_diff(_deadline, time.ticks_ms())
-    _bright = _rem * 20 // 1500       # fades from 20 to 0 as deadline approaches
-    ksm.np[0] = (0, 0, _bright)
-    ksm.np.write()
-    time.sleep_ms(50)
-    if ksm.menu_triple_press():
+# Skipped when USB is connected — the user can recover broken scripts via USB.
+# On battery: run the full sequence so triple-press MENU can force MENU mode.
+if not _usb:
+    for _ in range(3):
+        for i in range(ksm.NB_LEDS):
+            ksm.np[i] = (0, 255, 0)
+        ksm.np.write()
+        time.sleep_ms(80)
         ksm.clear_all()
-        print("Safety: switching to MENU mode.")
-        _eeprom_write_mode(EEPROM_MODE_MENU)
-        machine.reset()
+        time.sleep_ms(80)
+
+    # Safety window: dim blue pulse, triple-press MENU → force MENU mode
+    _deadline = time.ticks_ms() + 1500
+    while time.ticks_diff(_deadline, time.ticks_ms()) > 0:
+        _rem    = time.ticks_diff(_deadline, time.ticks_ms())
+        _bright = _rem * 20 // 1500
+        ksm.np[0] = (0, 0, _bright)
+        ksm.np.write()
+        time.sleep_ms(50)
+        if ksm.menu_triple_press():
+            ksm.clear_all()
+            print("Safety: switching to MENU mode.")
+            _eeprom_write_mode(EEPROM_MODE_MENU)
+            machine.reset()
+
 ksm.clear_all()
 
 # ── Mode check ─────────────────────────────────────────────────────────────────
@@ -185,13 +196,6 @@ if _setup:
         print("setup() error:", e)
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
-# Pre-write POWER flag so MENU 2s-hold sleep works on battery.
-# Skipped when USB is connected (USBDETECTED=1) so Ctrl+D in Thonny doesn't
-# trigger the sleep loop — the flag stays 0x00 and soft reset boots normally.
-_NRF_POWER_USBDETECTED = 0x4000039C  # 1 = USB present
-if not machine.mem32[_NRF_POWER_USBDETECTED]:
-    _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([EEPROM_POWER_OFF]))
-
 print("Running." if _loop else "Waiting for app.")
 
 _check_t = 0

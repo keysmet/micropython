@@ -6,7 +6,7 @@
 #
 # Call ksm.start() is handled by main.py — do NOT call it from your app.
 
-from machine import Pin, Timer
+from machine import Pin
 from neopixel import NeoPixel
 import array, time, machine
 
@@ -55,22 +55,21 @@ _state   = array.array('b', [0] * _KEY_COUNT)
 _press   = array.array('b', [0] * _KEY_COUNT)
 _hold_ms = array.array('l', [0] * _KEY_COUNT)
 
-# Triple-press MENU detection — pre-allocated arrays (no heap allocation in ISR)
+# Triple-press MENU detection
 _menu_press_count = array.array('b', [0])
 _menu_press_last  = array.array('l', [0])
 _menu_triple      = array.array('b', [0])
 _TRIPLE_WINDOW_MS = 500
 
-_timer_keys = None
+_pre_reset_hooks = []  # main.py registers callbacks to run before the sleep reset
 
-def _scan_keys(timer):
+def _scan_keys():
     now = time.ticks_ms()
     for i in range(_KEY_COUNT):
         curr = 1 if _pins[i].value() == 0 else 0
-        if curr == 1 and _state[i] == 0:  # rising edge: check _state before updating it
+        if curr == 1 and _state[i] == 0:  # rising edge
             _press[i]   = 1
             _hold_ms[i] = now
-            # Triple-press detection on MENU
             if i == KEY_MENU:
                 if time.ticks_diff(now, _menu_press_last[0]) < _TRIPLE_WINDOW_MS:
                     _menu_press_count[0] += 1
@@ -81,15 +80,16 @@ def _scan_keys(timer):
                     _menu_triple[0] = 1
                     _menu_press_count[0] = 0
         _state[i] = curr
-    # Power off: MENU held 2s → reset (POWER flag pre-written by main.py)
+    # Power off: MENU held 2s → fire hooks (write sleep flag) then reset
     if _state[KEY_MENU] and time.ticks_diff(now, _hold_ms[KEY_MENU]) >= 2000:
+        for fn in _pre_reset_hooks:
+            try: fn()
+            except: pass
         machine.reset()
 
 def start():
-    """Start the hardware key scanner. Called once by main.py after boot checks."""
-    global _timer_keys
-    _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_scan_keys)
-    _timer_keys.start()
+    """No-op — key scanning now happens inside tick(). Kept for API compatibility."""
+    pass
 
 # ── Scheduled callbacks ────────────────────────────────────────────────────────
 _scheduled = []
@@ -99,12 +99,13 @@ def after(ms, fn):
     _scheduled.append([time.ticks_add(time.ticks_ms(), ms), fn])
 
 def tick():
-    """Process pending callbacks and yield 10 ms. Always returns True.
+    """Scan keys, process pending callbacks, and yield 10 ms. Always returns True.
 
     Use in loops to allow scheduled callbacks to fire while waiting:
         while ksm.tick():
             if key_press(KEY_K1): break
     """
+    _scan_keys()
     now = time.ticks_ms()
     i = 0
     while i < len(_scheduled):
