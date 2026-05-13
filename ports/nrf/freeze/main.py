@@ -54,7 +54,7 @@ def _sleep_loop():
     NRF_POWER_SYSTEMOFF       = 0x40000500  # POWER.SYSTEMOFF — write 1 to enter System OFF
     NRF_PIN_CNF_PULLUP_SENSE_LOW = 0x0003000C  # bits[3:2]=11 (pull-up), bits[17:16]=11 (sense low)
 
-    ksm.clear_all()
+    ksm.clearAll()
     menu = Pin(ksm.PIN_MENU, Pin.IN, Pin.PULL_UP)
 
     # ── Wake-up path ───────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ def _sleep_loop():
         while menu.value() == 0:
             elapsed = time.ticks_diff(time.ticks_ms(), start)
             if elapsed >= _WAKE_HOLD_MS:
-                ksm.clear_all()
+                ksm.clearAll()
                 _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([0x00]))
                 machine.reset()
             n = elapsed * ksm.NB_LEDS // _WAKE_HOLD_MS
@@ -76,7 +76,7 @@ def _sleep_loop():
                 ksm.np[i] = (0, 20, 0) if i < n else (0, 0, 0)
             ksm.np.write()
             time.sleep_ms(20)
-        ksm.clear_all()  # released before 2s — go back to sleep
+        ksm.clearAll()  # released before 2s — go back to sleep
 
     # ── System OFF ─────────────────────────────────────────────────────────────
     # Configure MENU pin (P1.10) to wake the chip on low level.
@@ -120,7 +120,7 @@ if not _usb:
             ksm.np[i] = (0, 255, 0)
         ksm.np.write()
         time.sleep_ms(80)
-        ksm.clear_all()
+        ksm.clearAll()
         time.sleep_ms(80)
 
     # Safety window: dim blue pulse, triple-press MENU → force MENU mode
@@ -132,12 +132,12 @@ if not _usb:
         ksm.np.write()
         time.sleep_ms(50)
         if ksm.menu_triple_press():
-            ksm.clear_all()
+            ksm.clearAll()
             print("Safety: switching to MENU mode.")
             _eeprom_write_mode(EEPROM_MODE_MENU)
             machine.reset()
 
-ksm.clear_all()
+ksm.clearAll()
 
 # ── Mode check ─────────────────────────────────────────────────────────────────
 # MODE determines what runs after boot:
@@ -173,14 +173,22 @@ _setup     = None
 _loop      = None
 _app_mtime = 0
 
+_CALLBACKS = ('onPress', 'onRelease', 'onTap', 'onUpdate',
+              'onMenuPress', 'onMenuRelease', 'onMenuTap')
+
 def _load_app():
     global _setup, _loop, _app_mtime
+    for cb in _CALLBACKS:
+        setattr(ksm, cb, None)
     try:
         _app_mtime = os.stat('/eeprom/app.py')[8]
         _ns = {}
         exec(open('/eeprom/app.py').read(), _ns)
         _setup = _ns.get('setup')
         _loop  = _ns.get('loop')
+        for cb in _CALLBACKS:
+            if cb in _ns:
+                setattr(ksm, cb, _ns[cb])
     except OSError:
         print("No app.py on /eeprom/. Upload one with:")
         print("  mpremote connect <PORT> cp app.py :/eeprom/app.py")
@@ -217,7 +225,7 @@ while True:
         try:
             if os.stat('/eeprom/app.py')[8] != _app_mtime:
                 print("app.py changed — reloading...")
-                ksm.clear_all()
+                ksm.clearAll()
                 _load_app()
                 if _setup:
                     _setup()
