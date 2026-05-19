@@ -92,7 +92,12 @@ JSFLAGS += -s EXPORTED_RUNTIME_METHODS="\
 	cwrap,\
 	FS$(EXPORTED_RUNTIME_METHODS_EXTRA)"
 JSFLAGS += --js-library library.js
+ifdef JSPI_LONGJMP_MODE
+JSFLAGS += -s SUPPORT_LONGJMP=$(JSPI_LONGJMP_MODE)
+CFLAGS  += -fwasm-exceptions
+else
 JSFLAGS += -s SUPPORT_LONGJMP=emscripten
+endif
 JSFLAGS += -s MODULARIZE -s EXPORT_NAME=_createMicroPythonModule
 
 ################################################################################

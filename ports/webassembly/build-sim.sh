@@ -20,6 +20,9 @@ fi
 # Build WASM
 make VARIANT=standard -j$(nproc)
 
+# Patch micropython.mjs for JSPI compatibility (node available via emsdk env).
+node patch-mjs-jspi.js
+
 # Copy output
 mkdir -p "$OUT"
 cp build-standard/micropython.mjs build-standard/micropython.wasm "$OUT/"
