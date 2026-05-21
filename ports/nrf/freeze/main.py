@@ -34,10 +34,7 @@ def _eeprom_write_raw(addr, data):
     time.sleep_ms(10)
 
 def _eeprom_read_mode():
-    try:
-        return _eeprom_read_raw(EEPROM_MODE_ADDR)[0]
-    except Exception:
-        return EEPROM_MODE_USER  # safe default
+    return _eeprom_read_raw(EEPROM_MODE_ADDR)[0]
 
 def _eeprom_write_mode(mode):
     _eeprom_write_raw(EEPROM_MODE_ADDR, bytes([mode]))
@@ -92,11 +89,8 @@ _usb = bool(machine.mem32[0x40000438] & 1)  # nRF POWER.USBREGSTATUS.VBUSDETECT
 
 # Enter sleep if the flag was written by the MENU 2s hold (battery or USB).
 # On upload, the flag is never pre-armed so this is always skipped.
-try:
-    if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
-        _sleep_loop()
-except Exception:
-    pass
+if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
+    _sleep_loop()
 
 # ── Start key scanner ──────────────────────────────────────────────────────────
 # Only called after the sleep check — the Timer must not run during _sleep_loop
@@ -183,7 +177,8 @@ def _load_app():
     try:
         _app_mtime = os.stat('/eeprom/app.py')[8]
         _ns = {}
-        exec(open('/eeprom/app.py').read(), _ns)
+        with open('/eeprom/app.py') as _f:
+            exec(_f.read(), _ns)
         _setup = _ns.get('setup')
         _loop  = _ns.get('loop')
         for cb in _CALLBACKS:
@@ -228,7 +223,10 @@ while True:
                 ksm.clearAll()
                 _load_app()
                 if _setup:
-                    _setup()
+                    try:
+                        _setup()
+                    except Exception as e:
+                        print("setup() error:", e)
         except OSError:
             pass
 

@@ -171,7 +171,7 @@ def _scan_keys():
     if _state[KEY_MENU] and _time.ticks_diff(now, _hold_ms[KEY_MENU]) >= 2000:
         for fn in _pre_reset_hooks:
             try: fn()
-            except: pass
+            except Exception: pass
         machine.reset()
 
 def _timer_cb(t):

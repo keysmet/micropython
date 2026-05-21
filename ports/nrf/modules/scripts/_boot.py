@@ -9,12 +9,12 @@ def setup_fs():
     try:
         bdev = nrf.Flash()
         vfs.mount(bdev, "/flash")
-    except:
+    except OSError:
         if fs_type is not None:
             try:
                 fs_type.mkfs(bdev)
                 vfs.mount(bdev, "/flash")
-            except:
+            except OSError:
                 return
 
     os.chdir("/flash")
@@ -51,13 +51,13 @@ def setup_eeprom_fs():
         fs   = OffsetBlockDev(bdev, start_block=2)
         try:
             vfs.mount(vfs.VfsLfs2(fs), "/eeprom")
-        except:
+        except OSError:
             vfs.VfsLfs2.mkfs(fs)
             vfs.mount(vfs.VfsLfs2(fs), "/eeprom")
 
         sys.path.append("/eeprom")
-    except Exception:
-        pass  # EEPROM not responding — continue without it
+    except Exception as e:
+        print("EEPROM mount failed:", e)
 
 
 setup_fs()
