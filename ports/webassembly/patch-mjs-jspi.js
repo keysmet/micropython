@@ -44,8 +44,10 @@ if (!mjs.includes(OLD_SCAN)) {
 }
 mjs = mjs.replace(OLD_SCAN, NEW_SCAN);
 
-// 2. Make pyimport() async so mp_js_do_import runs inside a promising context.
-//    mp_js_do_import calls emscripten_sleep somewhere in the Python runtime init.
+// 3. Make pyimport() and runPythonAsync() work via WebAssembly.promising().
+//    Both call WASM functions that use emscripten_sleep, which requires a JSPI
+//    fiber context. Module.ccall({ async: true }) uses the asyncify path which
+//    returns undefined instead of a Promise in JSPI mode.
 const OLD_PYIMPORT = `    proxy_js_init();
     const pyimport = (name) => {
         const value = Module._malloc(3 * 4);
@@ -60,6 +62,7 @@ const OLD_PYIMPORT = `    proxy_js_init();
 
 const NEW_PYIMPORT = `    proxy_js_init();
     const _asyncDoImport = WebAssembly.promising(Module.wasmExports['mp_js_do_import']);
+    const _asyncDoExec = WebAssembly.promising(Module.wasmExports['mp_js_do_exec_async']);
     const pyimport = async (name) => {
         const value = Module._malloc(3 * 4);
         const nameLen = Module.lengthBytesUTF8(name);
@@ -76,7 +79,22 @@ if (!mjs.includes(OLD_PYIMPORT)) {
 }
 mjs = mjs.replace(OLD_PYIMPORT, NEW_PYIMPORT);
 
-// 3. Await pyimport('__main__') in the return object.
+// 4. Replace ccall({ async: true }) in runPythonAsync with _asyncDoExec.
+const OLD_EXEC = `            await Module.ccall(
+                "mp_js_do_exec_async",
+                "number",
+                ["pointer", "number", "pointer"],
+                [buf, len, value],
+                { async: true },
+            );`;
+const NEW_EXEC = `            await _asyncDoExec(buf, len, value);`;
+if (!mjs.includes(OLD_EXEC)) {
+    console.error('PATCH FAILED: runPythonAsync ccall pattern not found in micropython.mjs');
+    process.exit(1);
+}
+mjs = mjs.replace(OLD_EXEC, NEW_EXEC);
+
+// 5. Await pyimport('__main__') in the return object.
 const OLD_DICT = `            __dict__: pyimport("__main__").__dict__,`;
 const NEW_DICT = `            __dict__: (await pyimport("__main__")).__dict__,`;
 if (!mjs.includes(OLD_DICT)) {
@@ -86,4 +104,4 @@ if (!mjs.includes(OLD_DICT)) {
 mjs = mjs.replace(OLD_DICT, NEW_DICT);
 
 fs.writeFileSync(mjsPath, mjs);
-console.log('OK — pyimport is async, scan_registers is a no-op, only emscripten_sleep is Suspending');
+console.log('OK — pyimport+runPythonAsync use promising(), scan_registers is a no-op, only emscripten_sleep is Suspending');

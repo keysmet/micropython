@@ -1,6 +1,6 @@
 # ksm.py — public hardware API for KSM1
 
-from machine import Pin
+from machine import Pin, Timer
 from neopixel import NeoPixel
 import array, machine
 import time as _time
@@ -111,6 +111,7 @@ _menu_triple      = array.array('b', [0])
 _TRIPLE_WINDOW_MS = 500
 
 _pre_reset_hooks = []
+_timer_keys = None
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
 # main.py wires these from the app namespace after loading app.py.
@@ -173,8 +174,13 @@ def _scan_keys():
             except: pass
         machine.reset()
 
+def _timer_cb(t):
+    _scan_keys()
+
 def start():
-    pass  # no-op — key scanning happens in tick()
+    global _timer_keys
+    _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_timer_cb)
+    _timer_keys.start()
 
 # ── Scheduled callbacks ────────────────────────────────────────────────────────
 _scheduled    = []
@@ -184,9 +190,8 @@ def delay(ms, fn):
     _scheduled.append([_time.ticks_add(_time.ticks_ms(), ms), fn])
 
 def tick():
-    """Scan keys, fire callbacks, and yield 10ms. Always returns True."""
+    """Fire scheduled callbacks and yield 10ms. Always returns True."""
     now = _time.ticks_ms()
-    _scan_keys()
     i = 0
     while i < len(_scheduled):
         if _time.ticks_diff(now, _scheduled[i][0]) >= 0:

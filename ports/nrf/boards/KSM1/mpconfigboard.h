@@ -75,3 +75,12 @@ extern void KSM1_board_early_init(void);
 
 extern void KSM1_board_enter_bootloader(void);
 #define MICROPY_BOARD_ENTER_BOOTLOADER(nargs, args) KSM1_board_enter_bootloader()
+
+// VM hook: runs every MICROPY_VM_HOOK_COUNT bytecodes.
+// Polls USB CDC so Ctrl+C interrupts tight Python loops, and detects 2s MENU hold.
+extern void KSM1_vm_hook(void);
+#define MICROPY_VM_HOOK_COUNT   (200)
+#define MICROPY_VM_HOOK_INIT    static uint vm_hook_div = MICROPY_VM_HOOK_COUNT;
+#define MICROPY_VM_HOOK_POLL    if (--vm_hook_div == 0) { vm_hook_div = MICROPY_VM_HOOK_COUNT; KSM1_vm_hook(); }
+#define MICROPY_VM_HOOK_LOOP    MICROPY_VM_HOOK_POLL
+#define MICROPY_VM_HOOK_RETURN  MICROPY_VM_HOOK_POLL
