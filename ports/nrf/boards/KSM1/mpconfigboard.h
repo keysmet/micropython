@@ -76,6 +76,10 @@ extern void KSM1_board_early_init(void);
 extern void KSM1_board_enter_bootloader(void);
 #define MICROPY_BOARD_ENTER_BOOTLOADER(nargs, args) KSM1_board_enter_bootloader()
 
+// Encode floats directly in the 32-bit object pointer (no heap allocation per float).
+// Safe on Cortex-M4 32-bit with MICROPY_FLOAT_IMPL_FLOAT enabled.
+#define MICROPY_OBJ_REPR (MICROPY_OBJ_REPR_C)
+
 // VM hook: runs every MICROPY_VM_HOOK_COUNT bytecodes.
 // Polls USB CDC so Ctrl+C interrupts tight Python loops, and detects 2s MENU hold.
 extern void KSM1_vm_hook(void);

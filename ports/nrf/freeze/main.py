@@ -154,7 +154,7 @@ if _mode == EEPROM_MODE_MENU:
         ksm.np[0] = (20, 8, 0) if _t < 10 else (0, 0, 0)
         ksm.np.write()
         time.sleep_ms(50)
-        if ksm.menu_triple_press():
+        if ksm.press(ksm.KEY_MENU):
             print("Switching to USER mode...")
             _eeprom_write_mode(EEPROM_MODE_USER)
             machine.reset()

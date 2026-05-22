@@ -2,7 +2,7 @@
 
 from machine import Pin, Timer
 from neopixel import NeoPixel
-import array, machine
+import machine
 import time as _time
 
 from pins import *
@@ -35,6 +35,14 @@ def flashColor(key, clr, ms):
     orig = np[NB_LEDS - key] if key != 0 else (0, 0, 0)
     setColor(key, clr)
     delay(ms, lambda: setColor(key, orig))
+
+def fadeColor(key, clr, ms):
+    if key == 0: return
+    start = np[NB_LEDS - key]
+    for i in range(len(_tweens) - 1, -1, -1):
+        if _tweens[i][4] == key:
+            _tweens.pop(i)
+    _tweens.append([_time.ticks_ms(), ms, start, clr, key])
 
 # ── Color helpers ──────────────────────────────────────────────────────────────
 class color:
@@ -96,18 +104,18 @@ _KEY_PINS  = [PIN_MENU, PIN_K1, PIN_K2, PIN_K3, PIN_K4, PIN_K5,
 _KEY_COUNT = len(_KEY_PINS)
 
 _pins    = [Pin(p, Pin.IN, Pin.PULL_UP) for p in _KEY_PINS]
-_state   = array.array('b', [0] * _KEY_COUNT)
-_press   = array.array('b', [0] * _KEY_COUNT)
-_release = array.array('b', [0] * _KEY_COUNT)
-_hold_ms = array.array('l', [0] * _KEY_COUNT)
-_tap_ms  = array.array('l', [0] * _KEY_COUNT)
+_state   = [0] * _KEY_COUNT
+_press   = [0] * _KEY_COUNT
+_release = [0] * _KEY_COUNT
+_hold_ms = [0] * _KEY_COUNT
+_tap_ms  = [0] * _KEY_COUNT
 
 _TAP_MAX_MS = 200
 
 # Triple-press MENU detection
-_menu_press_count = array.array('b', [0])
-_menu_press_last  = array.array('l', [0])
-_menu_triple      = array.array('b', [0])
+_menu_press_count = 0
+_menu_press_last  = 0
+_menu_triple      = False
 _TRIPLE_WINDOW_MS = 500
 
 _pre_reset_hooks = []
@@ -125,6 +133,7 @@ onMenuRelease = None
 onMenuTap     = None
 
 def _scan_keys():
+    global _menu_press_count, _menu_press_last, _menu_triple
     now = _time.ticks_ms()
     for i in range(_KEY_COUNT):
         curr = 1 if _pins[i].value() == 0 else 0
@@ -133,14 +142,14 @@ def _scan_keys():
             _hold_ms[i] = now
             _tap_ms[i]  = now
             if i == KEY_MENU:
-                if _time.ticks_diff(now, _menu_press_last[0]) < _TRIPLE_WINDOW_MS:
-                    _menu_press_count[0] += 1
+                if _time.ticks_diff(now, _menu_press_last) < _TRIPLE_WINDOW_MS:
+                    _menu_press_count += 1
                 else:
-                    _menu_press_count[0] = 1
-                _menu_press_last[0] = now
-                if _menu_press_count[0] >= 3:
-                    _menu_triple[0] = 1
-                    _menu_press_count[0] = 0
+                    _menu_press_count = 1
+                _menu_press_last = now
+                if _menu_press_count >= 3:
+                    _menu_triple = True
+                    _menu_press_count = 0
                 if onMenuPress:
                     try: onMenuPress()
                     except Exception as e: print("onMenuPress:", e)
@@ -182,15 +191,17 @@ def start():
     _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_timer_cb)
     _timer_keys.start()
 
-# ── Scheduled callbacks ────────────────────────────────────────────────────────
+# ── Scheduled callbacks and tweens ────────────────────────────────────────────
 _scheduled    = []
-_last_tick_ms = array.array('l', [_time.ticks_ms()])
+_tweens       = []  # [start_ms, duration_ms, start_clr, end_clr, key]
+_last_tick_ms = _time.ticks_ms()
 
 def delay(ms, fn):
     _scheduled.append([_time.ticks_add(_time.ticks_ms(), ms), fn])
 
 def tick():
     """Fire scheduled callbacks and yield 10ms. Always returns True."""
+    global _last_tick_ms
     now = _time.ticks_ms()
     i = 0
     while i < len(_scheduled):
@@ -199,22 +210,36 @@ def tick():
             fn()
         else:
             i += 1
+    i = 0
+    while i < len(_tweens):
+        tw = _tweens[i]
+        elapsed = _time.ticks_diff(now, tw[0])
+        if elapsed >= tw[1]:
+            setColor(tw[4], tw[3])
+            _tweens.pop(i)
+        else:
+            t = elapsed / tw[1]
+            setColor(tw[4], (int(tw[2][0] + (tw[3][0] - tw[2][0]) * t),
+                             int(tw[2][1] + (tw[3][1] - tw[2][1]) * t),
+                             int(tw[2][2] + (tw[3][2] - tw[2][2]) * t)))
+            i += 1
     _flush()
     if onUpdate:
-        try: onUpdate(_time.ticks_diff(now, _last_tick_ms[0]))
+        try: onUpdate(_time.ticks_diff(now, _last_tick_ms))
         except Exception as e: print("onUpdate:", e)
-    _last_tick_ms[0] = now
+    _last_tick_ms = now
     _time.sleep_ms(10)
     return True
 
 # ── Time tracking ──────────────────────────────────────────────────────────────
-_time_ref = array.array('l', [_time.ticks_ms()])
+_time_ref = _time.ticks_ms()
 
 def time():
-    return _time.ticks_diff(_time.ticks_ms(), _time_ref[0])
+    return _time.ticks_diff(_time.ticks_ms(), _time_ref)
 
 def resetTime():
-    _time_ref[0] = _time.ticks_ms()
+    global _time_ref
+    _time_ref = _time.ticks_ms()
 
 # ── Utility ────────────────────────────────────────────────────────────────────
 def restart():
@@ -289,14 +314,15 @@ def waitUntil(fn):
 
 def menu_triple_press():
     """True once if MENU was pressed 3 times quickly. Used internally by main.py."""
-    if _menu_triple[0]:
-        _menu_triple[0] = 0
+    global _menu_triple
+    if _menu_triple:
+        _menu_triple = False
         return True
     return False
 
 # ── Exports ────────────────────────────────────────────────────────────────────
 __all__ = [
-    'NB_LEDS', 'clearAll', 'setColor', 'flashColor', 'color', 'lerp',
+    'NB_LEDS', 'clearAll', 'setColor', 'flashColor', 'fadeColor', 'color', 'lerp',
     'KEY_MENU', 'KEY_K1', 'KEY_K10',
     'down', 'press', 'release', 'hold',
     'waitPress', 'waitRelease', 'waitUntil',
