@@ -1,9 +1,9 @@
 // Post-build patch: make micropython.mjs compatible with JSPI.
-// Run from ports/webassembly/ after building the standard variant.
+// Run from ports/webassembly/ after building the ksm variant.
 const fs = require('fs');
 const path = require('path');
 
-const mjsPath = path.join(__dirname, 'build-standard/micropython.mjs');
+const mjsPath = path.join(__dirname, 'build-ksm/micropython.mjs');
 let mjs = fs.readFileSync(mjsPath, 'utf8');
 
 // 1. Remove .isAsync from imports that don't need to suspend.

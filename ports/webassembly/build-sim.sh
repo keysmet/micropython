@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild MicroPython WASM (standard variant) and copy to ksm-mpy-web.
+# Rebuild MicroPython WASM (ksm variant) and copy to ksm-mpy-web.
 # Run from ports/webassembly/ in WSL: bash build-sim.sh
 
 set -e
@@ -18,12 +18,12 @@ if [ ! -f "$MPY_CROSS/mpy-cross" ]; then
 fi
 
 # Build WASM
-make VARIANT=standard -j$(nproc)
+make VARIANT=ksm -j$(nproc)
 
 # Patch micropython.mjs for JSPI compatibility (node available via emsdk env).
 node patch-mjs-jspi.js
 
 # Copy output
 mkdir -p "$OUT"
-cp build-standard/micropython.mjs build-standard/micropython.wasm "$OUT/"
+cp build-ksm/micropython.mjs build-ksm/micropython.wasm "$OUT/"
 echo "Done — WASM copied to $OUT"

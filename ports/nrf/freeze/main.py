@@ -80,6 +80,10 @@ def _sleep_loop():
     machine.mem32[NRF_P1_PIN_CNF_MENU] = NRF_PIN_CNF_PULLUP_SENSE_LOW
     # Clear port-1 LATCH — stale DETECT can prevent entering System OFF
     machine.mem32[NRF_P1_LATCH] = 0xFFFFFFFF
+    # Release I2C pull-ups before cutting power — prevents overvoltage into
+    # EEPROM/IMU input pins (spec: max VCC+0.3V; VCC=0 after power cut).
+    Pin(ksm.PIN_I2C_SDA, Pin.IN)
+    Pin(ksm.PIN_I2C_SCL, Pin.IN)
     # Cut external power (EEPROM, IMU) before sleeping
     Pin(ksm.PIN_PWR_ON, Pin.OUT).value(0)
     # Enter System OFF (~0.4µA). Cold boot on MENU press. Never returns.
@@ -136,11 +140,12 @@ ksm.clearAll()
 # ── Mode check ─────────────────────────────────────────────────────────────────
 # MODE determines what runs after boot:
 #   MENU mode (0x00): no user script, shows a standby pattern.
-#                     Triple-press MENU → switch to USER mode.
+#                     Single-press MENU → switch to USER mode.
 #   USER mode (0x01): loads /eeprom/app.py and runs it.
 #                     Triple-press MENU → switch to MENU mode.
 #
-# To switch mode: triple-press MENU quickly (<500ms between presses).
+# MENU→USER: single press (safe — no script running to interrupt).
+# USER→MENU: triple-press quickly (<500ms between presses).
 # To upload a new script: mpremote connect <PORT> cp app.py :/eeprom/app.py
 
 _mode = _eeprom_read_mode()
