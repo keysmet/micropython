@@ -14,12 +14,11 @@
 #include "py/runtime.h"
 #include "py/mphal.h"
 #include "shared/tinyusb/mp_usbd_cdc.h"
-
-// P1.10 (MENU key, active low) and P0.07 (external power rail)
-#define KSM1_MENU_PORT_BIT  (1UL << 10)
-#define KSM1_PWR_ON_BIT     (1UL << 7)
-// PIN_CNF value: input, pull-up, sense on low level — wakes from System OFF
-#define KSM1_PIN_CNF_SENSE_LOW  (0x0003000CUL)
+#if MICROPY_HW_USB_HID
+#ifndef NO_QSTR
+#include "tusb.h"
+#endif
+#endif
 
 void KSM1_vm_hook(void) {
     // 1. Drain any USB CDC data that didn't fit in the ring buffer when it arrived.
@@ -42,6 +41,16 @@ void KSM1_board_enter_bootloader(void) {
     NVIC_SystemReset();
 }
 
+#if MICROPY_HW_USB_HID
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
+    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)reqlen;
+    return 0;
+}
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
+    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)bufsize;
+}
+#endif
+
 void KSM1_board_early_init(void) {
     // MDBT50Q runs in High Voltage mode (VDDH). UICR.REGOUT0 controls GPIO
     // output voltage and defaults to 1.8V (erased flash = 0xFFFFFFFF).
@@ -53,4 +62,13 @@ void KSM1_board_early_init(void) {
         NRF_NVMC->CONFIG = 0;              // disable flash write
         NVIC_SystemReset();                // REGOUT0 change requires reset
     }
+
+    // Write-protect the entire 1MB code flash via ACL.
+    // ACL is cleared on system reset, so the Adafruit bootloader (which runs
+    // before MicroPython on every reset) retains full write access for DFU/UF2.
+    // Prevents Python-level writes via machine.mem32 or NVMC from corrupting
+    // the SoftDevice, firmware, or ROMFS.
+    NRF_ACL->ACL[0].ADDR = 0x00000000;
+    NRF_ACL->ACL[0].SIZE = 0x00100000;    // 1MB — full code flash
+    NRF_ACL->ACL[0].PERM = (1UL << 2);   // WRITE_Disable, READ_Allow
 }

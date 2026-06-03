@@ -90,6 +90,7 @@ INC += -I../../lib/nrfx/mdk
 INC += -I../../lib/nrfx/hal
 INC += -I../../lib/nrfx/drivers/src/
 INC += -I../../shared/readline
+INC += -I../../shared/tinyusb
 
 MCU_VARIANT_UPPER = $(shell echo $(MCU_VARIANT) | tr '[:lower:]' '[:upper:]')
 MCU_SUB_VARIANT_UPPER = $(shell echo $(MCU_SUB_VARIANT) | tr '[:lower:]' '[:upper:]')
@@ -258,6 +259,7 @@ SRC_C += $(addprefix lib/tinyusb/src/,\
 	device/usbd.c \
 	device/usbd_control.c \
 	class/cdc/cdc_device.c \
+	class/hid/hid_device.c \
 	tusb.c \
 	portable/nordic/nrf5x/dcd_nrf5x.c \
 	)

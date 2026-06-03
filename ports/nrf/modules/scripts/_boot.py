@@ -1,29 +1,3 @@
-def setup_fs():
-    import gc
-    import vfs
-    import sys
-    import nrf
-    import os
-
-    fs_type = getattr(vfs, "VfsLfs2", getattr(vfs, "VfsLfs1", getattr(vfs, "VfsFat", None)))
-    try:
-        bdev = nrf.Flash()
-        vfs.mount(bdev, "/flash")
-    except OSError:
-        if fs_type is not None:
-            try:
-                fs_type.mkfs(bdev)
-                vfs.mount(bdev, "/flash")
-            except OSError:
-                return
-
-    os.chdir("/flash")
-    sys.path.append("/flash")
-    sys.path.append("/flash/lib")
-
-    gc.collect()
-
-
 def setup_eeprom_fs():
     # Mount the M24256 EEPROM as LittleFS at /eeprom.
     # Runs on every soft reset (same as setup_fs for /flash) so the VFS
@@ -36,6 +10,7 @@ def setup_eeprom_fs():
     try:
         import vfs
         import sys
+        import os
         import time
         from machine import I2C, Pin
         from m24256 import M24256, OffsetBlockDev
@@ -56,12 +31,11 @@ def setup_eeprom_fs():
             vfs.mount(vfs.VfsLfs2(fs), "/eeprom")
 
         sys.path.append("/eeprom")
+        sys.path.append("/eeprom/lib")
+        os.chdir("/eeprom")
     except Exception as e:
         print("EEPROM mount failed:", e)
 
-
-setup_fs()
-del setup_fs
 
 setup_eeprom_fs()
 del setup_eeprom_fs

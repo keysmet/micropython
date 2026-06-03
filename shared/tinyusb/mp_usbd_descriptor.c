@@ -53,6 +53,10 @@ const tusb_desc_device_t mp_usbd_builtin_desc_dev = {
     .bNumConfigurations = 1,
 };
 
+#if CFG_TUD_HID
+static const uint8_t _hid_kbd_report_desc[] = { TUD_HID_REPORT_DESC_KEYBOARD() };
+#endif
+
 const uint8_t mp_usbd_builtin_desc_cfg[MP_USBD_BUILTIN_DESC_CFG_LEN] = {
     TUD_CONFIG_DESCRIPTOR(1, USBD_ITF_BUILTIN_MAX, USBD_STR_0, MP_USBD_BUILTIN_DESC_CFG_LEN,
         0, USBD_MAX_POWER_MA),
@@ -64,7 +68,18 @@ const uint8_t mp_usbd_builtin_desc_cfg[MP_USBD_BUILTIN_DESC_CFG_LEN] = {
     #if CFG_TUD_MSC
     TUD_MSC_DESCRIPTOR(USBD_ITF_MSC, USBD_STR_MSC, EPNUM_MSC_OUT, EPNUM_MSC_IN, USBD_MSC_IN_OUT_MAX_SIZE),
     #endif
+    #if CFG_TUD_HID
+    TUD_HID_DESCRIPTOR(USBD_ITF_HID, 0, HID_ITF_PROTOCOL_KEYBOARD,
+        sizeof(_hid_kbd_report_desc), USBD_HID_EP_IN, 8, 5),
+    #endif
 };
+
+#if CFG_TUD_HID
+uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
+    (void)instance;
+    return _hid_kbd_report_desc;
+}
+#endif
 
 const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     char serial_buf[MICROPY_HW_USB_DESC_STR_MAX + 1]; // Includes terminating NUL byte

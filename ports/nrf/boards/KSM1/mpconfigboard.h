@@ -44,6 +44,7 @@
 // USB CDC REPL via native nRF52840 USB
 #define MICROPY_HW_ENABLE_USBDEV    (1)
 #define MICROPY_HW_USB_CDC          (1)
+#define MICROPY_HW_USB_HID          (1)
 
 // LED: use PWR_LED (P0.07) as the single built-in LED
 // LED_PULLUP = 0 means active high (set pin HIGH to turn on)

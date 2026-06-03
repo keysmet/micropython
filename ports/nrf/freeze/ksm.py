@@ -119,7 +119,7 @@ _menu_triple      = False
 _TRIPLE_WINDOW_MS = 500
 
 _pre_reset_hooks = []
-_timer_keys = None
+_timer_keys = None  # keeps the Timer object alive (GC would stop it)
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
 # main.py wires these from the app namespace after loading app.py.
@@ -320,6 +320,16 @@ def menu_triple_press():
         return True
     return False
 
+# ── USB HID ────────────────────────────────────────────────────────────────────
+# hid_keys([keycode, ...], modifier=0) — send a USB HID keyboard report.
+# Keycodes: USB HID usage page 0x07 (e.g. 4=A, 40=Enter, 79=Right, 80=Left).
+# Pass [] to release all keys.
+try:
+    from hid import hid_keys
+except ImportError:
+    def hid_keys(keycodes, modifier=0):
+        pass
+
 # ── Exports ────────────────────────────────────────────────────────────────────
 __all__ = [
     'NB_LEDS', 'clearAll', 'setColor', 'flashColor', 'fadeColor', 'color', 'lerp',
@@ -328,4 +338,5 @@ __all__ = [
     'waitPress', 'waitRelease', 'waitUntil',
     'tick', 'delay', 'wait',
     'time', 'resetTime', 'restart',
+    'hid_keys',
 ]

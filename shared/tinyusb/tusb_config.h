@@ -75,6 +75,15 @@
 #define CFG_TUD_MSC             (0)
 #endif
 
+#if MICROPY_HW_USB_HID
+#define CFG_TUD_HID             (1)
+#ifndef CFG_TUD_HID_EP_BUFSIZE
+#define CFG_TUD_HID_EP_BUFSIZE  (8)
+#endif
+#else
+#define CFG_TUD_HID             (0)
+#endif
+
 // CDC Configuration
 #if CFG_TUD_CDC
 #ifndef CFG_TUD_CDC_RX_BUFSIZE
@@ -129,19 +138,42 @@
 #endif // CFG_TUD_CDC
 #endif // CFG_TUD_MSC
 
-/* Limits of builtin USB interfaces, endpoints, strings */
+#if CFG_TUD_HID
+// HID interface and endpoint come after CDC (and MSC if present)
 #if CFG_TUD_MSC
-#define USBD_ITF_BUILTIN_MAX (USBD_ITF_MSC + 1)
+#define USBD_ITF_HID   (USBD_ITF_MSC + 1)
+#define USBD_HID_EP_IN (EPNUM_MSC_IN + 1)
+#elif CFG_TUD_CDC
+#define USBD_ITF_HID   (USBD_ITF_CDC + 2)
+#define USBD_HID_EP_IN (USBD_CDC_EP_IN + 1)
+#else
+#define USBD_ITF_HID   (0)
+#define USBD_HID_EP_IN (0x81)
+#endif
+#endif // CFG_TUD_HID
+
+/* Limits of builtin USB string descriptors (HID has no string entry) */
+#if CFG_TUD_MSC
 #define USBD_STR_BUILTIN_MAX (USBD_STR_MSC + 1)
-#define USBD_EP_BUILTIN_MAX (EPNUM_MSC_OUT + 1)
+#elif CFG_TUD_CDC
+#define USBD_STR_BUILTIN_MAX (USBD_STR_CDC + 1)
+#else
+#define USBD_STR_BUILTIN_MAX (0)
+#endif
+
+/* Limits of builtin USB interfaces and endpoints */
+#if CFG_TUD_HID
+#define USBD_ITF_BUILTIN_MAX (USBD_ITF_HID + 1)
+#define USBD_EP_BUILTIN_MAX  (((USBD_HID_EP_IN) & 0x7Fu) + 1)
+#elif CFG_TUD_MSC
+#define USBD_ITF_BUILTIN_MAX (USBD_ITF_MSC + 1)
+#define USBD_EP_BUILTIN_MAX  (EPNUM_MSC_OUT + 1)
 #elif CFG_TUD_CDC
 #define USBD_ITF_BUILTIN_MAX (USBD_ITF_CDC + 2)
-#define USBD_STR_BUILTIN_MAX (USBD_STR_CDC + 1)
-#define USBD_EP_BUILTIN_MAX (((USBD_CDC_EP_IN)&~TUSB_DIR_IN_MASK) + 1)
-#else // !CFG_TUD_MSC && !CFG_TUD_CDC
+#define USBD_EP_BUILTIN_MAX  (((USBD_CDC_EP_IN) & ~TUSB_DIR_IN_MASK) + 1)
+#else
 #define USBD_ITF_BUILTIN_MAX (0)
-#define USBD_STR_BUILTIN_MAX (0)
-#define USBD_EP_BUILTIN_MAX (0)
+#define USBD_EP_BUILTIN_MAX  (0)
 #endif
 
 #endif // MICROPY_HW_ENABLE_USBDEV
