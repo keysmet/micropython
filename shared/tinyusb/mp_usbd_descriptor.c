@@ -54,7 +54,22 @@ const tusb_desc_device_t mp_usbd_builtin_desc_dev = {
 };
 
 #if CFG_TUD_HID
-static const uint8_t _hid_kbd_report_desc[] = { TUD_HID_REPORT_DESC_KEYBOARD() };
+// Report ID 1 = keyboard, report ID 2 = gamepad (10 buttons)
+static const uint8_t _hid_report_desc[] = {
+    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(1)),
+    HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+    HID_USAGE(HID_USAGE_DESKTOP_GAMEPAD),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_REPORT_ID(2)
+        HID_USAGE_PAGE(HID_USAGE_PAGE_BUTTON),
+        HID_USAGE_MIN(1), HID_USAGE_MAX(10),
+        HID_LOGICAL_MIN(0), HID_LOGICAL_MAX(1),
+        HID_REPORT_COUNT(10), HID_REPORT_SIZE(1),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+        HID_REPORT_COUNT(6), HID_REPORT_SIZE(1),
+        HID_INPUT(HID_CONSTANT),
+    HID_COLLECTION_END,
+};
 #endif
 
 const uint8_t mp_usbd_builtin_desc_cfg[MP_USBD_BUILTIN_DESC_CFG_LEN] = {
@@ -69,15 +84,15 @@ const uint8_t mp_usbd_builtin_desc_cfg[MP_USBD_BUILTIN_DESC_CFG_LEN] = {
     TUD_MSC_DESCRIPTOR(USBD_ITF_MSC, USBD_STR_MSC, EPNUM_MSC_OUT, EPNUM_MSC_IN, USBD_MSC_IN_OUT_MAX_SIZE),
     #endif
     #if CFG_TUD_HID
-    TUD_HID_DESCRIPTOR(USBD_ITF_HID, 0, HID_ITF_PROTOCOL_KEYBOARD,
-        sizeof(_hid_kbd_report_desc), USBD_HID_EP_IN, 8, 5),
+    TUD_HID_DESCRIPTOR(USBD_ITF_HID, 0, HID_ITF_PROTOCOL_NONE,
+        sizeof(_hid_report_desc), USBD_HID_EP_IN, 16, 5),
     #endif
 };
 
 #if CFG_TUD_HID
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {
     (void)instance;
-    return _hid_kbd_report_desc;
+    return _hid_report_desc;
 }
 #endif
 
