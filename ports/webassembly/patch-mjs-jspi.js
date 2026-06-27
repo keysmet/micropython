@@ -12,6 +12,7 @@ const ASYNC_IMPORTS = ['___syscall_poll', '_fd_sync'];
 for (const name of ASYNC_IMPORTS) {
     const pat = `${name}.isAsync = true;`;
     if (!mjs.includes(pat)) {
+        if (mjs.includes(`${name}.isAsync = false;`)) continue; // already patched
         console.error(`PATCH FAILED: ${pat} not found in micropython.mjs`);
         process.exit(1);
     }
@@ -39,10 +40,13 @@ const OLD_SCAN = `  var _emscripten_scan_registers = (func) => {
 const NEW_SCAN = `  var _emscripten_scan_registers = (func) => {};
   _emscripten_scan_registers.isAsync = false;`;
 if (!mjs.includes(OLD_SCAN)) {
-    console.error('PATCH FAILED: emscripten_scan_registers pattern not found in micropython.mjs');
-    process.exit(1);
+    if (!mjs.includes(NEW_SCAN)) {
+        console.error('PATCH FAILED: emscripten_scan_registers pattern not found in micropython.mjs');
+        process.exit(1);
+    }
+} else {
+    mjs = mjs.replace(OLD_SCAN, NEW_SCAN);
 }
-mjs = mjs.replace(OLD_SCAN, NEW_SCAN);
 
 // 3. Make pyimport() and runPythonAsync() work via WebAssembly.promising().
 //    Both call WASM functions that use emscripten_sleep, which requires a JSPI
@@ -74,10 +78,13 @@ const NEW_PYIMPORT = `    proxy_js_init();
     };`;
 
 if (!mjs.includes(OLD_PYIMPORT)) {
-    console.error('PATCH FAILED: pyimport pattern not found in micropython.mjs');
-    process.exit(1);
+    if (!mjs.includes(NEW_PYIMPORT)) {
+        console.error('PATCH FAILED: pyimport pattern not found in micropython.mjs');
+        process.exit(1);
+    }
+} else {
+    mjs = mjs.replace(OLD_PYIMPORT, NEW_PYIMPORT);
 }
-mjs = mjs.replace(OLD_PYIMPORT, NEW_PYIMPORT);
 
 // 4. Replace ccall({ async: true }) in runPythonAsync with _asyncDoExec.
 const OLD_EXEC = `            await Module.ccall(
@@ -89,19 +96,25 @@ const OLD_EXEC = `            await Module.ccall(
             );`;
 const NEW_EXEC = `            await _asyncDoExec(buf, len, value);`;
 if (!mjs.includes(OLD_EXEC)) {
-    console.error('PATCH FAILED: runPythonAsync ccall pattern not found in micropython.mjs');
-    process.exit(1);
+    if (!mjs.includes(NEW_EXEC)) {
+        console.error('PATCH FAILED: runPythonAsync ccall pattern not found in micropython.mjs');
+        process.exit(1);
+    }
+} else {
+    mjs = mjs.replace(OLD_EXEC, NEW_EXEC);
 }
-mjs = mjs.replace(OLD_EXEC, NEW_EXEC);
 
 // 5. Await pyimport('__main__') in the return object.
 const OLD_DICT = `            __dict__: pyimport("__main__").__dict__,`;
 const NEW_DICT = `            __dict__: (await pyimport("__main__")).__dict__,`;
 if (!mjs.includes(OLD_DICT)) {
-    console.error('PATCH FAILED: __main__ pyimport pattern not found');
-    process.exit(1);
+    if (!mjs.includes(NEW_DICT)) {
+        console.error('PATCH FAILED: __main__ pyimport pattern not found');
+        process.exit(1);
+    }
+} else {
+    mjs = mjs.replace(OLD_DICT, NEW_DICT);
 }
-mjs = mjs.replace(OLD_DICT, NEW_DICT);
 
 fs.writeFileSync(mjsPath, mjs);
 console.log('OK — pyimport+runPythonAsync use promising(), scan_registers is a no-op, only emscripten_sleep is Suspending');
