@@ -31,7 +31,6 @@ MENU,P42
 
 # LEDs
 PWR_LED,P7
-MENU_LED,P28
 
 # Power / status
 PWR_ON,P25

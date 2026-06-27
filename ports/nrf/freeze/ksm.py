@@ -8,14 +8,16 @@ import time as _time
 from pins import *
 
 # ── NeoPixels ──────────────────────────────────────────────────────────────────
-NB_LEDS = 10
+NB_LEDS = 11
 np      = NeoPixel(Pin(PIN_LED), NB_LEDS)
 _dirty  = False
 
+def _pix(key):
+    return 0 if key == 0 else NB_LEDS - key
+
 def setColor(key, clr):
     global _dirty
-    if key == 0: return
-    np[NB_LEDS - key] = clr
+    np[_pix(key)] = clr
     _dirty = True
 
 def clearAll():
@@ -32,13 +34,12 @@ def _flush():
         _dirty = False
 
 def flashColor(key, clr, ms):
-    orig = np[NB_LEDS - key] if key != 0 else (0, 0, 0)
+    orig = np[_pix(key)]
     setColor(key, clr)
     delay(ms, lambda: setColor(key, orig))
 
 def fadeColor(key, clr, ms):
-    if key == 0: return
-    start = np[NB_LEDS - key]
+    start = np[_pix(key)]
     for i in range(len(_tweens) - 1, -1, -1):
         if _tweens[i][4] == key:
             _tweens.pop(i)

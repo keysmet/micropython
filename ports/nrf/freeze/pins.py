@@ -3,7 +3,8 @@
 # No imports, no objects: safe to import from _boot.py at early boot.
 
 PIN_PWR_ON  = 25  # P0.25 — external power rail (EEPROM, IMU)
-PIN_LED     = 0   # P0.00 — NeoPixel data
+PIN_LED     = 0   # P0.00 — NeoPixel data (chain: MENU_LED → LED10 → … → LED1)
+PIN_PWR_LED = 7   # P0.07 — power/charging indicator LED (plain GPIO)
 PIN_I2C_SCL = 11  # P0.11
 PIN_I2C_SDA = 4   # P0.04
 PIN_MENU    = 42  # P1.10
