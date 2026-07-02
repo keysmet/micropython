@@ -7,7 +7,7 @@
  *
  * KSM1_vm_hook() is called by MICROPY_VM_HOOK_LOOP every 200 bytecodes.
  * It processes pending USB CDC data (so Ctrl+C interrupts tight Python loops)
- * and detects a 2s MENU hold to force System OFF without going through Python.
+ * and detects a 2s MENU hold to trigger the board power-off flow via GPREGRET.
  */
 
 #include "nrf.h"
@@ -20,16 +20,39 @@
 #endif
 #endif
 
+#define KSM1_MENU_PORT1_BIT       (10u)   // P1.10
+#define KSM1_HOLD_MS_POWER_OFF    (2000u)
+#define KSM1_GPREGRET_POWER_OFF   (0xA2u)
+
 void KSM1_vm_hook(void) {
+    static uint32_t menu_hold_start_ms = 0;
+    static bool menu_was_down = false;
+
     // 1. Drain any USB CDC data that didn't fit in the ring buffer when it arrived.
     //    tud_cdc_rx_cb already called mp_sched_keyboard_interrupt() for Ctrl+C bytes;
     //    this just ensures nothing is stranded if the buffer was temporarily full.
     mp_usbd_cdc_poll_interfaces(0);
 
-    // 2. Process the pending KeyboardInterrupt (or any other scheduled event).
+    // 2. Emergency power-off path: MENU held for 2s forces System OFF flow.
+    //    This runs from the VM hook so it still works for tight Python loops.
+    bool menu_down = ((NRF_P1->IN & (1u << KSM1_MENU_PORT1_BIT)) == 0);
+    if (menu_down) {
+        uint32_t now = mp_hal_ticks_ms();
+        if (!menu_was_down) {
+            menu_was_down = true;
+            menu_hold_start_ms = now;
+        } else if ((uint32_t)(now - menu_hold_start_ms) >= KSM1_HOLD_MS_POWER_OFF) {
+            __disable_irq();
+            NRF_POWER->GPREGRET = KSM1_GPREGRET_POWER_OFF;
+            NVIC_SystemReset();
+        }
+    } else {
+        menu_was_down = false;
+    }
+
+    // 3. Process the pending KeyboardInterrupt (or any other scheduled event).
     //    This is what actually raises the exception inside the Python VM.
-    //    Timer callbacks (including the ksm key scanner) also run here, which is
-    //    how MENU-hold sleep detection works even inside infinite loops.
+    //    This keeps Ctrl+C and scheduler-driven events responsive.
     mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
 }
 

@@ -23,6 +23,9 @@ EEPROM_POWER_OFF  = 0xDE  # arbitrary sentinel: non-zero (≠ on) and non-0xFF (
 EEPROM_MODE_MENU  = 0x00
 EEPROM_MODE_USER  = 0x01
 
+NRF_POWER_GPREGRET      = 0x4000051C
+KSM1_GPREGRET_POWER_OFF = 0xA2
+
 _i2c = I2C(0, scl=Pin(ksm.PIN_I2C_SCL), sda=Pin(ksm.PIN_I2C_SDA))
 
 def _eeprom_read_raw(addr, n=1):
@@ -42,7 +45,7 @@ def _eeprom_write_mode(mode):
 # ── Sleep loop ─────────────────────────────────────────────────────────────────
 # Entered when POWER flag is 0xDE. Board appears "off".
 # MENU press → clears flag → resets → normal boot.
-# Note: ksm.start() has NOT been called yet — no Timer running here.
+# Key scanning is not needed in this path. MENU is read directly from GPIO.
 
 def _sleep_loop():
     # nRF52840 register addresses for System OFF (same names as nRF5 SDK)
@@ -91,21 +94,15 @@ def _sleep_loop():
 
 _usb = bool(machine.mem32[0x40000438] & 1)  # nRF POWER.USBREGSTATUS.VBUSDETECT
 
-# Enter sleep if the flag was written by the MENU 2s hold (battery or USB).
-# On upload, the flag is never pre-armed so this is always skipped.
-if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
+# One-reset board intent flags (set from board.c VM hook).
+_gpregret = machine.mem32[NRF_POWER_GPREGRET]
+if _gpregret == KSM1_GPREGRET_POWER_OFF:
+    machine.mem32[NRF_POWER_GPREGRET] = 0
     _sleep_loop()
 
-# ── Start key scanner ──────────────────────────────────────────────────────────
-# Only called after the sleep check — the Timer must not run during _sleep_loop
-# because it would trigger a reset on 2s MENU hold, keeping the board in sleep.
-ksm.start()
-
-# Register the sleep flag write so it fires only on the MENU 2s hold reset,
-# not on upload soft resets or any other reset.
-ksm._pre_reset_hooks.append(
-    lambda: _eeprom_write_raw(EEPROM_POWER_ADDR, bytes([EEPROM_POWER_OFF]))
-)
+# Legacy/persistent power-off flag support (for compatibility with existing units).
+if _eeprom_read_raw(EEPROM_POWER_ADDR)[0] == EEPROM_POWER_OFF:
+    _sleep_loop()
 
 # /eeprom is mounted by _boot.py on every boot/soft-reset, before main.py runs.
 
@@ -128,7 +125,7 @@ if not _usb:
         _bright = _rem * 20 // 1500
         ksm.np[0] = (0, 0, _bright)
         ksm.np.write()
-        time.sleep_ms(50)
+        ksm.wait(50)
         if ksm.menu_triple_press():
             ksm.clearAll()
             print("Safety: switching to MENU mode.")
@@ -158,7 +155,7 @@ if _mode == EEPROM_MODE_MENU:
         _t = (_t + 1) % 20
         ksm.np[0] = (20, 8, 0) if _t < 10 else (0, 0, 0)
         ksm.np.write()
-        time.sleep_ms(50)
+        ksm.wait(50)
         if ksm.press(ksm.KEY_MENU):
             print("Switching to USER mode...")
             _eeprom_write_mode(EEPROM_MODE_USER)

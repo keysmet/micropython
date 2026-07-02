@@ -1,6 +1,6 @@
 # ksm.py — public hardware API for KSM1
 
-from machine import Pin, Timer
+from machine import Pin
 from neopixel import NeoPixel
 import machine
 import time as _time
@@ -118,9 +118,7 @@ _menu_press_count = 0
 _menu_press_last  = 0
 _menu_triple      = False
 _TRIPLE_WINDOW_MS = 500
-
-_pre_reset_hooks = []
-_timer_keys = None  # keeps the Timer object alive (GC would stop it)
+_timer_keys       = None  # compatibility shim for existing live-coding upload command
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
 # main.py wires these from the app namespace after loading app.py.
@@ -177,21 +175,6 @@ def _scan_keys():
                     try: onRelease(i)
                     except Exception as e: print("onRelease:", e)
         _state[i] = curr
-    # Power off: MENU held 2s → fire hooks then reset
-    if _state[KEY_MENU] and _time.ticks_diff(now, _hold_ms[KEY_MENU]) >= 2000:
-        for fn in _pre_reset_hooks:
-            try: fn()
-            except Exception: pass
-        machine.reset()
-
-def _timer_cb(t):
-    _scan_keys()
-
-def start():
-    global _timer_keys
-    _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_timer_cb)
-    _timer_keys.start()
-
 # ── Scheduled callbacks and tweens ────────────────────────────────────────────
 _scheduled    = []
 _tweens       = []  # [start_ms, duration_ms, start_clr, end_clr, key]
@@ -203,6 +186,7 @@ def delay(ms, fn):
 def tick():
     """Fire scheduled callbacks and yield 10ms. Always returns True."""
     global _last_tick_ms
+    _scan_keys()
     now = _time.ticks_ms()
     i = 0
     while i < len(_scheduled):
