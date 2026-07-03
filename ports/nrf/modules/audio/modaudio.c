@@ -72,6 +72,7 @@
 typedef struct _audio_voice_t {
     sfxr_state state;
     volatile bool active;
+    uint32_t seq;  // play() order, used to steal the oldest voice when full
 } audio_voice_t;
 
 typedef struct _audio_obj_t {
@@ -87,6 +88,10 @@ typedef struct _audio_obj_t {
 } audio_obj_t;
 
 static audio_obj_t audio_obj;
+
+// Monotonic counter assigned to each voice on play(), so the oldest active
+// voice can be identified when the pool is full and needs to be stolen.
+static uint32_t audio_seq;
 
 // ---------------------------------------------------------------------------
 // IRQ mixing: render each active voice and sum into the DMA buffer.
@@ -249,7 +254,8 @@ static void audio_params_from_dict(mp_obj_t dict, sfxr_params *p) {
 // Python API.
 // ---------------------------------------------------------------------------
 
-// audio.play(params) -> True if a voice was allocated, False if all busy.
+// audio.play(params) -> always True. Picks a free voice if one exists,
+// otherwise steals the oldest active voice so newer sounds replace old ones.
 static mp_obj_t audio_play(mp_obj_t params_in) {
     if (!mp_obj_is_type(params_in, &mp_type_dict)) {
         mp_raise_TypeError(MP_ERROR_TEXT("params must be a dict"));
@@ -261,18 +267,30 @@ static mp_obj_t audio_play(mp_obj_t params_in) {
     sfxr_params p;
     audio_params_from_dict(params_in, &p);
 
-    // Find a free voice slot. Reading `active` is racy against the IRQ, but the
-    // IRQ only ever clears it; a slot we observe as free stays free until we
-    // arm it here (play() runs in thread context, not from IRQ).
+    // Choose a target slot: prefer a free one, else the oldest active voice.
+    // Reading `active`/`seq` is racy against the IRQ, but the IRQ only ever
+    // clears `active` (never arms a voice), so at worst we steal a voice that
+    // just finished on its own — which is harmless.
+    audio_voice_t *target = NULL;
     for (int v = 0; v < AUDIO_MAX_VOICES; v++) {
         audio_voice_t *voice = &self->voices[v];
         if (!voice->active) {
-            sfxr_reset(&voice->state, &p);
-            voice->active = true;
-            return mp_const_true;
+            target = voice;
+            break;
+        }
+        // Track the oldest voice as a steal candidate (smallest seq).
+        if (target == NULL || voice->seq < target->seq) {
+            target = voice;
         }
     }
-    return mp_const_false;
+
+    // Arm the target. Clear `active` first so the IRQ can't mix a voice whose
+    // sfxr_state is only half-initialized while we overwrite it.
+    target->active = false;
+    sfxr_reset(&target->state, &p);
+    target->seq = ++audio_seq;
+    target->active = true;
+    return mp_const_true;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(audio_play_obj, audio_play);
 
