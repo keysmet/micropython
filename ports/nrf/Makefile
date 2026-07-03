@@ -80,7 +80,9 @@ INC += -I./modules/music
 INC += -I./modules/ble
 INC += -I./modules/board
 INC += -I./modules/nrf
+INC += -I./modules/audio
 INC += -I./drivers
+INC += -I./drivers/sfxr
 INC += -I./drivers/bluetooth
 INC += -I./drivers/usb
 INC += -I../../lib/nrfx/
@@ -223,6 +225,7 @@ SRC_NRFX += $(addprefix lib/nrfx/drivers/src/,\
 	nrfx_nvmc.c \
 	nrfx_power.c \
 	nrfx_clock.c \
+	nrfx_i2s.c \
 	)
 
 SRC_C += \
@@ -234,6 +237,7 @@ SRC_C += \
 	pin_named_pins.c \
 	fatfs_port.c \
 	drivers/flash.c \
+	drivers/sfxr/sfxr.c \
 	drivers/rng.c \
 	drivers/softpwm.c \
 	drivers/ticker.c \
@@ -288,6 +292,7 @@ DRIVERS_SRC_C += $(addprefix modules/,\
 	ubluepy/ubluepy_scan_entry.c \
 	music/modmusic.c \
 	music/musictunes.c \
+	audio/modaudio.c \
 	ble/modble.c \
 	nrf/modnrf.c \
 	nrf/flashbdev.c \
