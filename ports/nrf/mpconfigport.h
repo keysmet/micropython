@@ -212,6 +212,10 @@
 #define MICROPY_PY_MUSIC            (0)
 #endif
 
+#ifndef MICROPY_PY_AUDIO
+#define MICROPY_PY_AUDIO           (0)
+#endif
+
 #ifndef MICROPY_PY_MACHINE_ADC
 #define MICROPY_PY_MACHINE_ADC      (0)
 #endif
