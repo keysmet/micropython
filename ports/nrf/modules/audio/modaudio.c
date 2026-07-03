@@ -44,6 +44,7 @@
 #include "py/obj.h"
 #include "py/mphal.h"
 #include "sfxr.h"
+#include "sfxr_mp.h"
 #include "nrfx_i2s.h"
 
 // Fixed output format. sfxr synthesizes at 22050 Hz; the I2S rate table in the
@@ -190,67 +191,6 @@ static void audio_hw_init(audio_obj_t *self) {
 }
 
 // ---------------------------------------------------------------------------
-// Dict -> sfxr_params.
-// ---------------------------------------------------------------------------
-
-// Fetch key from the params dict as a float, or `defval` if absent.
-static float audio_get_float(mp_obj_t dict, qstr key, float defval) {
-    mp_map_t *map = mp_obj_dict_get_map(dict);
-    mp_map_elem_t *elem = mp_map_lookup(map, MP_OBJ_NEW_QSTR(key), MP_MAP_LOOKUP);
-    if (elem == NULL) {
-        return defval;
-    }
-    return mp_obj_get_float(elem->value);
-}
-
-static int audio_get_int(mp_obj_t dict, qstr key, int defval) {
-    mp_map_t *map = mp_obj_dict_get_map(dict);
-    mp_map_elem_t *elem = mp_map_lookup(map, MP_OBJ_NEW_QSTR(key), MP_MAP_LOOKUP);
-    if (elem == NULL) {
-        return defval;
-    }
-    return mp_obj_get_int(elem->value);
-}
-
-static void audio_params_from_dict(mp_obj_t dict, sfxr_params *p) {
-    memset(p, 0, sizeof(*p));
-
-    p->wave_type      = audio_get_int(dict, MP_QSTR_wave_type, 0);
-
-    p->p_env_attack   = audio_get_float(dict, MP_QSTR_p_env_attack, 0.0f);
-    p->p_env_sustain  = audio_get_float(dict, MP_QSTR_p_env_sustain, 0.3f);
-    p->p_env_punch    = audio_get_float(dict, MP_QSTR_p_env_punch, 0.0f);
-    p->p_env_decay    = audio_get_float(dict, MP_QSTR_p_env_decay, 0.4f);
-
-    p->p_base_freq    = audio_get_float(dict, MP_QSTR_p_base_freq, 0.3f);
-    p->p_freq_limit   = audio_get_float(dict, MP_QSTR_p_freq_limit, 0.0f);
-    p->p_freq_ramp    = audio_get_float(dict, MP_QSTR_p_freq_ramp, 0.0f);
-    p->p_freq_dramp   = audio_get_float(dict, MP_QSTR_p_freq_dramp, 0.0f);
-
-    p->p_vib_strength = audio_get_float(dict, MP_QSTR_p_vib_strength, 0.0f);
-    p->p_vib_speed    = audio_get_float(dict, MP_QSTR_p_vib_speed, 0.0f);
-
-    p->p_arp_mod      = audio_get_float(dict, MP_QSTR_p_arp_mod, 0.0f);
-    p->p_arp_speed    = audio_get_float(dict, MP_QSTR_p_arp_speed, 0.0f);
-
-    p->p_duty         = audio_get_float(dict, MP_QSTR_p_duty, 0.0f);
-    p->p_duty_ramp    = audio_get_float(dict, MP_QSTR_p_duty_ramp, 0.0f);
-
-    p->p_repeat_speed = audio_get_float(dict, MP_QSTR_p_repeat_speed, 0.0f);
-
-    p->p_pha_offset   = audio_get_float(dict, MP_QSTR_p_pha_offset, 0.0f);
-    p->p_pha_ramp     = audio_get_float(dict, MP_QSTR_p_pha_ramp, 0.0f);
-
-    p->p_lpf_freq     = audio_get_float(dict, MP_QSTR_p_lpf_freq, 1.0f);
-    p->p_lpf_ramp     = audio_get_float(dict, MP_QSTR_p_lpf_ramp, 0.0f);
-    p->p_lpf_resonance = audio_get_float(dict, MP_QSTR_p_lpf_resonance, 0.0f);
-    p->p_hpf_freq     = audio_get_float(dict, MP_QSTR_p_hpf_freq, 0.0f);
-    p->p_hpf_ramp     = audio_get_float(dict, MP_QSTR_p_hpf_ramp, 0.0f);
-
-    p->sound_vol      = audio_get_float(dict, MP_QSTR_sound_vol, 0.25f);
-}
-
-// ---------------------------------------------------------------------------
 // Python API.
 // ---------------------------------------------------------------------------
 
@@ -265,7 +205,7 @@ static mp_obj_t audio_play(mp_obj_t params_in) {
     audio_hw_init(self);
 
     sfxr_params p;
-    audio_params_from_dict(params_in, &p);
+    sfxr_params_from_mp_dict(params_in, &p);
 
     // Choose a target slot: prefer a free one, else the oldest active voice.
     // Reading `active`/`seq` is racy against the IRQ, but the IRQ only ever

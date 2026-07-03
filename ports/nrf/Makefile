@@ -238,6 +238,7 @@ SRC_C += \
 	fatfs_port.c \
 	drivers/flash.c \
 	drivers/sfxr/sfxr.c \
+	drivers/sfxr/sfxr_mp.c \
 	drivers/rng.c \
 	drivers/softpwm.c \
 	drivers/ticker.c \

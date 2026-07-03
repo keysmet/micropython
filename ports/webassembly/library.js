@@ -94,4 +94,22 @@ mergeInto(LibraryManager.library, {
 
     mp_js_random_u32: () =>
         globalThis.crypto.getRandomValues(new Uint32Array(1))[0],
+
+    // KSM1 audio bridge: modaudio.c renders an sfxr sound into the wasm heap as
+    // `nsamples` mono floats at `ptr` and calls this to play it. The host page
+    // installs globalThis._ksmAudioPlay to forward the samples to Web Audio; a
+    // copy is taken here because the C buffer is freed right after this returns.
+    mp_js_audio_play: (ptr, nsamples, sample_rate) => {
+        if (!globalThis._ksmAudioPlay || nsamples <= 0) {
+            return;
+        }
+        const samples = HEAPF32.slice(ptr >> 2, (ptr >> 2) + nsamples);
+        globalThis._ksmAudioPlay(samples, sample_rate);
+    },
+
+    mp_js_audio_stop: () => {
+        if (globalThis._ksmAudioStop) {
+            globalThis._ksmAudioStop();
+        }
+    },
 });
