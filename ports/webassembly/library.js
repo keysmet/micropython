@@ -34,48 +34,20 @@ mergeInto(LibraryManager.library, {
     // Callers in C (VM hook, mphalport.c) are responsible for calling
     // mp_sched_keyboard_interrupt() + mp_handle_pending() on a non-zero return.
     // No JS→C calls here to avoid ASYNCIFY re-entrancy issues.
+    //
+    // Two triggers: an explicit stop request (globalThis._mpInterruptRequest,
+    // set by the host on Run/stop) and an instruction-count watchdog that breaks
+    // runaway loops. mp_js_extend_watchdog resets the counter on real sleeps.
+    // Runs the same in browser and Node — the host is responsible for defining
+    // the two globals before executing code.
     mp_js_hook: () => {
-        if (!ENVIRONMENT_IS_NODE) {
-            if (globalThis._mpInterruptRequest) {
-                globalThis._mpInterruptRequest = false;
-                return 1;
-            }
-            if (++globalThis._mpHookCount > 100000) {
-                globalThis._mpHookCount = 0;
-                return 1;
-            }
-            return 0;
+        if (globalThis._mpInterruptRequest) {
+            globalThis._mpInterruptRequest = false;
+            return 1;
         }
-        if (ENVIRONMENT_IS_NODE) {
-            const mp_interrupt_char = Module.ccall(
-                "mp_hal_get_interrupt_char",
-                "number",
-                ["number"],
-                ["null"],
-            );
-            const fs = require("fs");
-
-            const buf = Buffer.alloc(1);
-            try {
-                const n = fs.readSync(process.stdin.fd, buf, 0, 1);
-                if (n > 0) {
-                    if (buf[0] === mp_interrupt_char) {
-                        Module.ccall(
-                            "mp_sched_keyboard_interrupt",
-                            "null",
-                            ["null"],
-                            ["null"],
-                        );
-                    } else {
-                        process.stdout.write(String.fromCharCode(buf[0]));
-                    }
-                }
-            } catch (e) {
-                if (e.code === "EAGAIN") {
-                } else {
-                    throw e;
-                }
-            }
+        if (++globalThis._mpHookCount > 100000) {
+            globalThis._mpHookCount = 0;
+            return 1;
         }
         return 0;
     },
