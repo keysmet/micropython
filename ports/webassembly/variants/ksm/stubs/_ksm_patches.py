@@ -29,7 +29,10 @@ class _Machine:
         def value(self, v=None):
             if v is not None: return
             if self._key < 0: return 0
-            return int(_nat.get_key_down(self._key))
+            # Real keys are active-low (PULL_UP): pressed reads 0, released 1.
+            # ksm._scan_keys treats value()==0 as pressed, so invert the host's
+            # "is down" boolean to match the hardware the firmware expects.
+            return 0 if _nat.get_key_down(self._key) else 1
 
     class Timer:
         ONE_SHOT = 0; PERIODIC = 1
