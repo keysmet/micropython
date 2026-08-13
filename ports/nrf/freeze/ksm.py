@@ -182,19 +182,44 @@ KEY_MENU = 0
 KEY_K1   = 1
 KEY_K10  = 10
 
-# ── Key scanner ────────────────────────────────────────────────────────────────
+# ── Keys ───────────────────────────────────────────────────────────────────────
 _KEY_PINS  = [PIN_MENU, PIN_K1, PIN_K2, PIN_K3, PIN_K4, PIN_K5,
               PIN_K6,   PIN_K7, PIN_K8, PIN_K9, PIN_K10]
 _KEY_COUNT = len(_KEY_PINS)
 
-_pins    = [Pin(p, Pin.IN, Pin.PULL_UP) for p in _KEY_PINS]
-_state   = [0] * _KEY_COUNT
-_press   = [0] * _KEY_COUNT
-_release = [0] * _KEY_COUNT
-_hold_ms = [0] * _KEY_COUNT
-_tap_ms  = [0] * _KEY_COUNT
-
 _TAP_MAX_MS = 200
+
+# One Key per button: its pin, whether it's down, the press/release edges the
+# public API consumes, and the timestamps for hold()/tap. scan() reads the pin
+# (active-low) and returns +1 on a press edge, -1 on release, 0 otherwise.
+# Runs inside the scan timer ISR, so it must not allocate — fields are mutated
+# in place (__slots__, plain ints).
+class Key:
+    __slots__ = ('pin', 'down', 'pressed', 'released', 'hold_ms', 'tap_ms')
+
+    def __init__(self, gpio):
+        self.pin = Pin(gpio, Pin.IN, Pin.PULL_UP)
+        self.down = 0
+        self.pressed = self.released = 0
+        self.hold_ms = self.tap_ms = 0
+
+    def scan(self, now):
+        curr = 1 if self.pin.value() == 0 else 0   # active-low: pressed reads 0
+        if curr and not self.down:
+            self.pressed = 1
+            self.hold_ms = self.tap_ms = now
+            self.down = 1
+            return 1
+        if not curr and self.down:
+            self.released = 1
+            self.down = 0
+            return -1
+        return 0
+
+    def is_tap(self, now):
+        return _time.ticks_diff(now, self.tap_ms) <= _TAP_MAX_MS
+
+_keys = [Key(p) for p in _KEY_PINS]
 
 # Triple-press MENU detection
 _menu_press_count = 0
@@ -220,11 +245,9 @@ def _scan_keys():
     global _menu_press_count, _menu_press_last, _menu_triple
     now = _time.ticks_ms()
     for i in range(_KEY_COUNT):
-        curr = 1 if _pins[i].value() == 0 else 0
-        if curr == 1 and _state[i] == 0:       # rising edge
-            _press[i]   = 1
-            _hold_ms[i] = now
-            _tap_ms[i]  = now
+        key = _keys[i]
+        edge = key.scan(now)
+        if edge == 1:                          # press
             if i == KEY_MENU:
                 if _time.ticks_diff(now, _menu_press_last) < _TRIPLE_WINDOW_MS:
                     _menu_press_count += 1
@@ -237,31 +260,27 @@ def _scan_keys():
                 if onMenuPress:
                     try: onMenuPress()
                     except Exception as e: print("onMenuPress:", e)
-            else:
-                if onPress:
-                    try: onPress(i)
-                    except Exception as e: print("onPress:", e)
-        elif curr == 0 and _state[i] == 1:     # falling edge
-            _release[i] = 1
+            elif onPress:
+                try: onPress(i)
+                except Exception as e: print("onPress:", e)
+        elif edge == -1:                       # release
             if i == KEY_MENU:
-                if _time.ticks_diff(now, _tap_ms[i]) <= _TAP_MAX_MS:
-                    if onMenuTap:
-                        try: onMenuTap()
-                        except Exception as e: print("onMenuTap:", e)
+                if key.is_tap(now) and onMenuTap:
+                    try: onMenuTap()
+                    except Exception as e: print("onMenuTap:", e)
                 if onMenuRelease:
                     try: onMenuRelease()
                     except Exception as e: print("onMenuRelease:", e)
             else:
-                if _time.ticks_diff(now, _tap_ms[i]) <= _TAP_MAX_MS:
-                    if onTap:
-                        try: onTap(i)
-                        except Exception as e: print("onTap:", e)
+                if key.is_tap(now) and onTap:
+                    try: onTap(i)
+                    except Exception as e: print("onTap:", e)
                 if onRelease:
                     try: onRelease(i)
                     except Exception as e: print("onRelease:", e)
-        _state[i] = curr
     # Power off: MENU held 2s → fire hooks then reset
-    if _state[KEY_MENU] and _time.ticks_diff(now, _hold_ms[KEY_MENU]) >= 2000:
+    menu = _keys[KEY_MENU]
+    if menu.down and _time.ticks_diff(now, menu.hold_ms) >= 2000:
         for fn in _pre_reset_hooks:
             try: fn()
             except Exception: pass
@@ -319,23 +338,23 @@ def down(*keys):
     """Returns a pressed key number (True for MENU), or False."""
     if not keys:
         for i in range(1, _KEY_COUNT):
-            if _state[i]: return i
+            if _keys[i].down: return i
         return False
     for k in keys:
-        if _state[k]: return k or True  # KEY_MENU=0 serait falsy sans ce or True
+        if _keys[k].down: return k or True  # KEY_MENU=0 serait falsy sans ce or True
     return False
 
 def press(*keys):
     """Returns key number on press (True for MENU, consumes event), or False."""
     if not keys:
         for i in range(1, _KEY_COUNT):
-            if _press[i]:
-                _press[i] = 0
+            if _keys[i].pressed:
+                _keys[i].pressed = 0
                 return i
         return False
     for k in keys:
-        if _press[k]:
-            _press[k] = 0
+        if _keys[k].pressed:
+            _keys[k].pressed = 0
             return k or True  # KEY_MENU=0 serait falsy sans ce or True
     return False
 
@@ -343,20 +362,21 @@ def release(*keys):
     """Returns key number on release (True for MENU, consumes event), or False."""
     if not keys:
         for i in range(1, _KEY_COUNT):
-            if _release[i]:
-                _release[i] = 0
+            if _keys[i].released:
+                _keys[i].released = 0
                 return i
         return False
     for k in keys:
-        if _release[k]:
-            _release[k] = 0
+        if _keys[k].released:
+            _keys[k].released = 0
             return k or True  # KEY_MENU=0 serait falsy sans ce or True
     return False
 
 def hold(key, ms):
-    if not _state[key]:
+    k = _keys[key]
+    if not k.down:
         return False
-    return _time.ticks_diff(_time.ticks_ms(), _hold_ms[key]) >= ms
+    return _time.ticks_diff(_time.ticks_ms(), k.hold_ms) >= ms
 
 def wait(ms):
     deadline = _time.ticks_add(_time.ticks_ms(), ms)
