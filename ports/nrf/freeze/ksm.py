@@ -227,7 +227,6 @@ _menu_press_last  = 0
 _menu_triple      = False
 _TRIPLE_WINDOW_MS = 500
 
-_pre_reset_hooks = []
 _timer_keys = None  # keeps the Timer object alive (GC would stop it)
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
@@ -279,12 +278,8 @@ def _scan_keys():
         elif edge == -1:                       # release
             if _keys[i].is_tap(now): _fire(tap, i)
             _fire(release, i)
-    # Power off: MENU held 2s → fire hooks then reset
-    if hold(KEY_MENU, 2000):
-        for fn in _pre_reset_hooks:
-            try: fn()
-            except Exception: pass
-        machine.reset()
+    # Power off (2s MENU hold) is owned by board.c's VM hook, so it works even
+    # when this cooperative scanner isn't running — nothing to do here.
 
 def _timer_cb(t):
     _scan_keys()
