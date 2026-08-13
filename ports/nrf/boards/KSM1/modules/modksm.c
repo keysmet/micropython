@@ -1,8 +1,9 @@
-// modksm.c — USB HID interface for KSM1 (keyboard + gamepad)
+// modksm.c — USB HID interface for KSM1 (keyboard + gamepad + consumer)
 //
-// Exposes two functions via the `hid` built-in module:
+// Exposes three functions via the `hid` built-in module:
 //   hid.hid_keys([keycodes], modifier=0)  — keyboard report (report ID 1)
 //   hid.hid_gamepad(bitmask)              — gamepad report  (report ID 2)
+//   hid.hid_consumer(usage)               — consumer/media  (report ID 3)
 //
 // Consumed by freeze/keyboard.py and freeze/gamepad.py respectively.
 // Keycodes: USB HID usage page 0x07 (4=A, 40=Enter, 44=Space, 80=Left arrow)
@@ -51,6 +52,22 @@ static mp_obj_t hid_hid_gamepad(mp_obj_t buttons_obj) {
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(hid_hid_gamepad_obj, hid_hid_gamepad);
+
+// ── hid.hid_consumer(usage) ───────────────────────────────────────────────────
+// Send a consumer-control report. usage is a 16-bit HID consumer usage code
+// (usage page 0x0C): 0xCD play/pause, 0xE9/0xEA volume up/down, 0xE2 mute, ...
+// Pass 0 to release.
+
+static mp_obj_t hid_hid_consumer(mp_obj_t usage_obj) {
+    uint16_t usage = (uint16_t)mp_obj_get_int(usage_obj);
+    uint8_t report[2] = {
+        (uint8_t)(usage & 0xFF),
+        (uint8_t)((usage >> 8) & 0xFF),
+    };
+    tud_hid_report(3, report, sizeof(report));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(hid_hid_consumer_obj, hid_hid_consumer);
 #endif
 
 // ── Export table ─────────────────────────────────────────────────────────────
@@ -60,6 +77,7 @@ static const mp_rom_map_elem_t hid_module_globals_table[] = {
     #if MICROPY_HW_USB_HID
     { MP_ROM_QSTR(MP_QSTR_hid_keys),     MP_ROM_PTR(&hid_hid_keys_obj) },
     { MP_ROM_QSTR(MP_QSTR_hid_gamepad),  MP_ROM_PTR(&hid_hid_gamepad_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hid_consumer), MP_ROM_PTR(&hid_hid_consumer_obj) },
     #endif
 };
 static MP_DEFINE_CONST_DICT(hid_module_globals, hid_module_globals_table);
