@@ -8,10 +8,10 @@ import time as _time
 from pins import *
 
 # ── NeoPixels ──────────────────────────────────────────────────────────────────
-# Each key has its own state, recomposited every tick (no scheduled callbacks):
+# Each key is an Led (below), recomposited every tick (no scheduled callbacks):
 #   base:  solid | fade (from→to over ms) | blink (from↔to, period ms)
 #   flash: a temporary color laid on top that decays back into the base.
-# All state is plain ints (0xRRGGBB), so nothing here allocates per frame.
+# Colors are plain ints (0xRRGGBB), so compositing allocates nothing per frame.
 NB_LEDS = 11
 np      = NeoPixel(Pin(PIN_LED), NB_LEDS)
 
@@ -23,78 +23,81 @@ _GAMMA = _sys.platform.startswith("nrf")   # True on device, False in the sim
 def _pix(key):
     return 0 if key == 0 else NB_LEDS - key
 
-# A color is a 24-bit int 0xRRGGBB. setColor also accepts "#RRGGBB" and (r,g,b).
+# A color is a 24-bit int 0xRRGGBB. Accepts "#RRGGBB" and (r,g,b) too.
 def _to_int(c):
     if type(c) is int: return c
     if type(c) is str: return int(c[1:] if c[0] == '#' else c, 16)
     return (c[0] << 16) | (c[1] << 8) | c[2]
 
-# Per-key base + flash state (parallel arrays, index by key 0..10).
-_c_to    = [0] * NB_LEDS   # base target
-_c_from  = [0] * NB_LEDS   # base start (for fade/blink)
-_c_t0    = [0] * NB_LEDS   # base start time
-_c_ms    = [0] * NB_LEDS   # fade duration (0 = solid), or blink period if _c_blink
-_c_blink = [False] * NB_LEDS
-_f_from  = [0] * NB_LEDS   # flash color
-_f_t0    = [0] * NB_LEDS   # flash start time
-_f_ms    = [0] * NB_LEDS   # flash duration (0 = no flash)
-_c_shown = [-1] * NB_LEDS  # last value written to np, to skip no-ops
+# One Led per key holds its base (solid/fade/blink) and flash-overlay state,
+# and knows how to composite itself. Mutating fields allocates nothing per frame.
+class Led:
+    __slots__ = ('to', 'frm', 't0', 'ms', 'blink', 'f_from', 'f_t0', 'f_ms', 'shown')
 
-def setColor(key, clr):
-    c = _to_int(clr)
-    _c_to[key] = _c_from[key] = c
-    _c_ms[key] = 0
-    _c_blink[key] = False
+    def __init__(self):
+        self.to = self.frm = 0
+        self.t0 = self.ms = 0
+        self.blink = False
+        self.f_from = self.f_t0 = self.f_ms = 0
+        self.shown = -1                       # last value written to np
 
-def fadeColor(key, clr, ms):
-    _c_from[key] = _compose(key)   # fade from what's shown now
-    _c_to[key]   = _to_int(clr)
-    _c_t0[key]   = _time.ticks_ms()
-    _c_ms[key]   = ms
-    _c_blink[key] = False
+    def set(self, c):
+        self.to = self.frm = c
+        self.ms = 0
+        self.blink = False
 
-def blink(key, frm, to, period):
-    _c_from[key], _c_to[key] = _to_int(frm), _to_int(to)
-    _c_t0[key], _c_ms[key], _c_blink[key] = _time.ticks_ms(), period, True
+    def fade(self, c, ms):
+        self.frm = self.compose()             # fade from what's shown now
+        self.to, self.t0, self.ms, self.blink = c, _time.ticks_ms(), ms, False
 
-def flashColor(key, clr, ms):
-    _f_from[key], _f_t0[key], _f_ms[key] = _to_int(clr), _time.ticks_ms(), ms
+    def do_blink(self, frm, to, period):
+        self.frm, self.to = frm, to
+        self.t0, self.ms, self.blink = _time.ticks_ms(), period, True
 
-# Base color for a key at the current time (no flash overlay).
-def _base(key, now):
-    ms = _c_ms[key]
-    if ms <= 0:
-        return _c_to[key]
-    t = _time.ticks_diff(now, _c_t0[key]) / ms
-    if _c_blink[key]:
-        t %= 1.0
-        t = t * 2 if t < 0.5 else 2 - t * 2      # 0→1→0 triangle
-    elif t >= 1.0:
-        return _c_to[key]
-    return color.mix(_c_from[key], _c_to[key], t)
+    def flash(self, c, ms):
+        self.f_from, self.f_t0, self.f_ms = c, _time.ticks_ms(), ms
 
-# Final displayed color: base with the decaying flash mixed on top.
-def _compose(key, now=None):
-    if now is None: now = _time.ticks_ms()
-    c = _base(key, now)
-    if _f_ms[key] > 0:
-        t = _time.ticks_diff(now, _f_t0[key]) / _f_ms[key]
-        if t >= 1.0: _f_ms[key] = 0
-        else: c = color.mix(_f_from[key], c, t)
-    return c
+    def _base(self, now):
+        if self.ms <= 0:
+            return self.to
+        t = _time.ticks_diff(now, self.t0) / self.ms
+        if self.blink:
+            t %= 1.0
+            t = t * 2 if t < 0.5 else 2 - t * 2      # 0→1→0 triangle
+        elif t >= 1.0:
+            return self.to
+        return color.mix(self.frm, self.to, t)
+
+    # Displayed color: base with the decaying flash mixed on top.
+    def compose(self, now=None):
+        if now is None: now = _time.ticks_ms()
+        c = self._base(now)
+        if self.f_ms > 0:
+            t = _time.ticks_diff(now, self.f_t0) / self.f_ms
+            if t >= 1.0: self.f_ms = 0
+            else: c = color.mix(self.f_from, c, t)
+        return c
+
+_leds = [Led() for _ in range(NB_LEDS)]
+
+def setColor(key, clr):   _leds[key].set(_to_int(clr))
+def fadeColor(key, clr, ms): _leds[key].fade(_to_int(clr), ms)
+def blink(key, frm, to, period): _leds[key].do_blink(_to_int(frm), _to_int(to), period)
+def flashColor(key, clr, ms): _leds[key].flash(_to_int(clr), ms)
 
 def clearAll():
-    for k in range(NB_LEDS):
-        setColor(k, 0)
-        _f_ms[k] = 0
+    for led in _leds:
+        led.set(0)
+        led.f_ms = 0
     _flush()
 
 def _flush():
     now = _time.ticks_ms()
     for k in range(NB_LEDS):
-        c = _compose(k, now)
-        if c != _c_shown[k]:
-            _c_shown[k] = c
+        led = _leds[k]
+        c = led.compose(now)
+        if c != led.shown:
+            led.shown = c
             if _GAMMA:  # f² per channel: (v*v)//255
                 r, g, b = (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF
                 np[_pix(k)] = (r * r // 255, g * g // 255, b * b // 255)
