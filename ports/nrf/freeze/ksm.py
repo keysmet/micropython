@@ -241,46 +241,46 @@ onMenuPress   = None
 onMenuRelease = None
 onMenuTap     = None
 
-def _scan_keys():
+# Fire a user callback by name (e.g. "onPress"), printing (never raising) if it
+# errors — a broken app callback must not kill the scan ISR. MENU callbacks
+# (onMenu*) take no key argument; the others receive the key number.
+def _fire(name, i):
+    fn = globals().get(name)
+    if fn:
+        try:
+            fn() if i == KEY_MENU else fn(i)
+        except Exception as e:
+            print(name + ":", e)
+
+def _count_menu_triple(now):
     global _menu_press_count, _menu_press_last, _menu_triple
+    if _time.ticks_diff(now, _menu_press_last) < _TRIPLE_WINDOW_MS:
+        _menu_press_count += 1
+    else:
+        _menu_press_count = 1
+    _menu_press_last = now
+    if _menu_press_count >= 3:
+        _menu_triple = True
+        _menu_press_count = 0
+
+def _scan_keys():
     now = _time.ticks_ms()
     for i in range(_KEY_COUNT):
-        key = _keys[i]
-        edge = key.scan(now)
+        edge = _keys[i].scan(now)
+        # MENU (key 0) uses the onMenu* callbacks and passes no key argument;
+        # every other key uses on* and receives its number.
+        if i == KEY_MENU:
+            press, tap, release = "onMenuPress", "onMenuTap", "onMenuRelease"
+            if edge == 1: _count_menu_triple(now)
+        else:
+            press, tap, release = "onPress", "onTap", "onRelease"
         if edge == 1:                          # press
-            if i == KEY_MENU:
-                if _time.ticks_diff(now, _menu_press_last) < _TRIPLE_WINDOW_MS:
-                    _menu_press_count += 1
-                else:
-                    _menu_press_count = 1
-                _menu_press_last = now
-                if _menu_press_count >= 3:
-                    _menu_triple = True
-                    _menu_press_count = 0
-                if onMenuPress:
-                    try: onMenuPress()
-                    except Exception as e: print("onMenuPress:", e)
-            elif onPress:
-                try: onPress(i)
-                except Exception as e: print("onPress:", e)
+            _fire(press, i)
         elif edge == -1:                       # release
-            if i == KEY_MENU:
-                if key.is_tap(now) and onMenuTap:
-                    try: onMenuTap()
-                    except Exception as e: print("onMenuTap:", e)
-                if onMenuRelease:
-                    try: onMenuRelease()
-                    except Exception as e: print("onMenuRelease:", e)
-            else:
-                if key.is_tap(now) and onTap:
-                    try: onTap(i)
-                    except Exception as e: print("onTap:", e)
-                if onRelease:
-                    try: onRelease(i)
-                    except Exception as e: print("onRelease:", e)
+            if _keys[i].is_tap(now): _fire(tap, i)
+            _fire(release, i)
     # Power off: MENU held 2s → fire hooks then reset
-    menu = _keys[KEY_MENU]
-    if menu.down and _time.ticks_diff(now, menu.hold_ms) >= 2000:
+    if hold(KEY_MENU, 2000):
         for fn in _pre_reset_hooks:
             try: fn()
             except Exception: pass
