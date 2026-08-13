@@ -60,25 +60,19 @@ if _intent == GPREGRET_POWER_OFF:
 # _system_off before it slept). The MENU press that woke us is still held;
 # require a full 1s hold to confirm — a brush against MENU in a bag shouldn't
 # power the board up. Released too early → straight back to System OFF.
-# Every other boot (fresh power, reset, crash, triple-press exit, launch with
-# MENU held) has a different intent and skips this entirely — the MENU pin is
-# never consulted, so nothing here can trigger on a non-wake boot.
+# Silent (no LEDs) while confirming. Every other boot (fresh power, reset, crash,
+# triple-press exit, launch with MENU held) has a different intent and skips this
+# entirely — the MENU pin is never consulted, so nothing here fires on a non-wake.
 if _intent == GPREGRET_SLEEPING:
     _menu = Pin(ksm.PIN_MENU, Pin.IN, Pin.PULL_UP)
     _HOLD_MS = 1000
     _start = time.ticks_ms()
     while _menu.value() == 0:
-        _elapsed = time.ticks_diff(time.ticks_ms(), _start)
-        if _elapsed >= _HOLD_MS:
+        if time.ticks_diff(time.ticks_ms(), _start) >= _HOLD_MS:
             break
-        _n = _elapsed * ksm.NB_LEDS // _HOLD_MS   # green progress bar
-        for _i in range(ksm.NB_LEDS):
-            ksm.np[_i] = (0, 20, 0) if _i < _n else (0, 0, 0)
-        ksm.np.write()
         time.sleep_ms(20)
     else:
         _system_off()                             # released before the hold
-    ksm.clearAll()
 
 # ── Start the cooperative key scanner ────────────────────────────────────────
 ksm.start()
@@ -141,10 +135,9 @@ print("MENU mode. Press any key to run your script." if _has_app
 _t = 0
 while True:
     _t = (_t + 1) % 20
-    ksm.np[0] = (20, 8, 0) if _t < 10 else (0, 0, 0)   # slow orange standby pulse
-    ksm.np.write()
-    ksm.wait(50)
-    if _has_app and ksm.press():        # any key
+    ksm.setColor(ksm.KEY_MENU, 0x140800 if _t < 10 else 0)   # slow orange standby pulse
+    ksm.wait(50)                        # wait() runs tick(), which flushes LEDs
+    if _has_app and ksm.press():        # any K1..K10
         print("Launching user script...")
         machine.mem32[NRF_POWER_GPREGRET] = GPREGRET_RUN_USER
         machine.reset()

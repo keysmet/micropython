@@ -23,6 +23,8 @@ carries boot intent across a reset without touching EEPROM:
 
     0xA1  RUN_USER   — main.py runs /eeprom/app.py once, then clears the flag
     0xA2  POWER_OFF  — main.py enters System OFF, then clears the flag
+    0xA3  SLEEPING   — set by _system_off() just before sleeping; the next boot
+                       reads it as "this is a wake" and runs the confirm gate
     0x57  BOOTLOADER — reserved Adafruit UF2 magic; NEVER written by our code
 
 `main.py` reads GPREGRET once at boot and **clears it immediately**, before
@@ -52,9 +54,10 @@ only one owner.
 
 1. Read `GPREGRET`; clear it to 0 immediately.
 2. `POWER_OFF` → `_system_off()` (never returns).
-3. **Wake confirm:** a System OFF wake cold-boots like a fresh power-on; the tell
-   is that MENU is held (the press that woke us). Require a 1s hold (green
-   progress bar) to confirm; released early → back to System OFF.
+3. **Wake confirm:** only a `SLEEPING` boot runs this (the flag `_system_off` set
+   before it slept — the MENU pin is never consulted on any other boot). MENU is
+   still held from the press that woke us; require a 1s hold to confirm (silent,
+   no LEDs); released early → back to System OFF.
 4. `ksm.start()` — start the cooperative key scanner (Timer 2).
 5. `RUN_USER` → load and run `/eeprom/app.py`; triple-press MENU → reset (→ MENU).
 6. Otherwise → MENU mode; any K1–K10 press → set `GPREGRET = RUN_USER`, reset.
