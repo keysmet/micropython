@@ -1,5 +1,4 @@
 from machine import Pin, I2C
-import os
 import time
 import machine
 import ksm
@@ -168,19 +167,15 @@ if _mode == EEPROM_MODE_MENU:
 # exec() runs the script in an isolated namespace.
 # The script accesses the KSM API via: from ksm import *
 
-_setup     = None
-_loop      = None
-_app_mtime = 0
+_setup = None
+_loop  = None
 
 _CALLBACKS = ('onPress', 'onRelease', 'onTap', 'onUpdate',
               'onMenuPress', 'onMenuRelease', 'onMenuTap')
 
 def _load_app():
-    global _setup, _loop, _app_mtime
-    for cb in _CALLBACKS:
-        setattr(ksm, cb, None)
+    global _setup, _loop
     try:
-        _app_mtime = os.stat('/eeprom/app.py')[8]
         _ns = {}
         with open('/eeprom/app.py') as _f:
             exec(_f.read(), _ns)
@@ -204,9 +199,11 @@ if _setup:
         print("setup() error:", e)
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
+# A new script is loaded by rebooting into it, not by reloading in place: the
+# uploader writes /eeprom/app.py then resets the board, so this loop only ever
+# runs one script from a clean boot. (No mtime file-watcher / in-place re-exec —
+# that path had to tear down timers and module state and was a source of bugs.)
 print("Running." if _loop else "Waiting for app.")
-
-_check_t = 0
 
 while True:
     if _loop:
@@ -217,23 +214,6 @@ while True:
             _loop = None  # stop calling after crash
 
     ksm.tick()  # fire after() callbacks + 10ms yield
-
-    # File watcher: reload app.py if mtime changed (~1s polling)
-    _check_t += 1
-    if _check_t >= 100:
-        _check_t = 0
-        try:
-            if os.stat('/eeprom/app.py')[8] != _app_mtime:
-                print("app.py changed — reloading...")
-                ksm.clearAll()
-                _load_app()
-                if _setup:
-                    try:
-                        _setup()
-                    except Exception as e:
-                        print("setup() error:", e)
-        except OSError:
-            pass
 
     # Triple-press MENU → switch to MENU mode
     if ksm.menu_triple_press():
