@@ -8,88 +8,168 @@ import time as _time
 from pins import *
 
 # ── NeoPixels ──────────────────────────────────────────────────────────────────
+# Each key has its own state, recomposited every tick (no scheduled callbacks):
+#   base:  solid | fade (from→to over ms) | blink (from↔to, period ms)
+#   flash: a temporary color laid on top that decays back into the base.
+# All state is plain ints (0xRRGGBB), so nothing here allocates per frame.
 NB_LEDS = 11
 np      = NeoPixel(Pin(PIN_LED), NB_LEDS)
-_dirty  = False
+
+# On the real device, LEDs are perceptually corrected (f² gamma) so mid-tones
+# match the linear sim. The sim writes colors straight through.
+import sys as _sys
+_GAMMA = _sys.platform.startswith("nrf")   # True on device, False in the sim
 
 def _pix(key):
     return 0 if key == 0 else NB_LEDS - key
 
+# A color is a 24-bit int 0xRRGGBB. setColor also accepts "#RRGGBB" and (r,g,b).
+def _to_int(c):
+    if type(c) is int: return c
+    if type(c) is str: return int(c[1:] if c[0] == '#' else c, 16)
+    return (c[0] << 16) | (c[1] << 8) | c[2]
+
+# Per-key base + flash state (parallel arrays, index by key 0..10).
+_c_to    = [0] * NB_LEDS   # base target
+_c_from  = [0] * NB_LEDS   # base start (for fade/blink)
+_c_t0    = [0] * NB_LEDS   # base start time
+_c_ms    = [0] * NB_LEDS   # fade duration (0 = solid), or blink period if _c_blink
+_c_blink = [False] * NB_LEDS
+_f_from  = [0] * NB_LEDS   # flash color
+_f_t0    = [0] * NB_LEDS   # flash start time
+_f_ms    = [0] * NB_LEDS   # flash duration (0 = no flash)
+_c_shown = [-1] * NB_LEDS  # last value written to np, to skip no-ops
+
 def setColor(key, clr):
-    global _dirty
-    np[_pix(key)] = clr
-    _dirty = True
-
-def clearAll():
-    global _dirty
-    for i in range(NB_LEDS):
-        np[i] = (0, 0, 0)
-    np.write()
-    _dirty = False
-
-def _flush():
-    global _dirty
-    if _dirty:
-        np.write()
-        _dirty = False
-
-def flashColor(key, clr, ms):
-    orig = np[_pix(key)]
-    setColor(key, clr)
-    delay(ms, lambda: setColor(key, orig))
+    c = _to_int(clr)
+    _c_to[key] = _c_from[key] = c
+    _c_ms[key] = 0
+    _c_blink[key] = False
 
 def fadeColor(key, clr, ms):
-    start = np[_pix(key)]
-    for i in range(len(_tweens) - 1, -1, -1):
-        if _tweens[i][4] == key:
-            _tweens.pop(i)
-    _tweens.append([_time.ticks_ms(), ms, start, clr, key])
+    _c_from[key] = _compose(key)   # fade from what's shown now
+    _c_to[key]   = _to_int(clr)
+    _c_t0[key]   = _time.ticks_ms()
+    _c_ms[key]   = ms
+    _c_blink[key] = False
 
-# ── Color helpers ──────────────────────────────────────────────────────────────
+def blink(key, frm, to, period):
+    _c_from[key], _c_to[key] = _to_int(frm), _to_int(to)
+    _c_t0[key], _c_ms[key], _c_blink[key] = _time.ticks_ms(), period, True
+
+def flashColor(key, clr, ms):
+    _f_from[key], _f_t0[key], _f_ms[key] = _to_int(clr), _time.ticks_ms(), ms
+
+# Base color for a key at the current time (no flash overlay).
+def _base(key, now):
+    ms = _c_ms[key]
+    if ms <= 0:
+        return _c_to[key]
+    t = _time.ticks_diff(now, _c_t0[key]) / ms
+    if _c_blink[key]:
+        t %= 1.0
+        t = t * 2 if t < 0.5 else 2 - t * 2      # 0→1→0 triangle
+    elif t >= 1.0:
+        return _c_to[key]
+    return color.mix(_c_from[key], _c_to[key], t)
+
+# Final displayed color: base with the decaying flash mixed on top.
+def _compose(key, now=None):
+    if now is None: now = _time.ticks_ms()
+    c = _base(key, now)
+    if _f_ms[key] > 0:
+        t = _time.ticks_diff(now, _f_t0[key]) / _f_ms[key]
+        if t >= 1.0: _f_ms[key] = 0
+        else: c = color.mix(_f_from[key], c, t)
+    return c
+
+def clearAll():
+    for k in range(NB_LEDS):
+        setColor(k, 0)
+        _f_ms[k] = 0
+    _flush()
+
+def _flush():
+    now = _time.ticks_ms()
+    for k in range(NB_LEDS):
+        c = _compose(k, now)
+        if c != _c_shown[k]:
+            _c_shown[k] = c
+            if _GAMMA:  # f² per channel: (v*v)//255
+                r, g, b = (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF
+                np[_pix(k)] = (r * r // 255, g * g // 255, b * b // 255)
+            else:
+                np[_pix(k)] = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+    np.write()
+
+# ── Colors ───────────────────────────────────────────────────────────────────
+# Every color is a 24-bit integer 0xRRGGBB. Named colors and the color.* helpers
+# all return ints, so nothing here allocates. The most common way to pick a color
+# is a hex literal (0xFF8800) or a name (ORANGE); color.rgb/color.hsl are for
+# building one from numbers.
+BLACK   = 0x000000
+WHITE   = 0xFFFFFF
+RED     = 0xFF0000
+GREEN   = 0x00FF00
+BLUE    = 0x0000FF
+YELLOW  = 0xFFFF00
+CYAN    = 0x00FFFF
+MAGENTA = 0xFF00FF
+ORANGE  = 0xFF8000
+PURPLE  = 0x8000FF
+PINK    = 0xFF40A0
+
 class color:
     @staticmethod
     def rgb(r, g, b):
-        return (int(r * 255), int(g * 255), int(b * 255))
+        """Build a color from red/green/blue, each 0..255. rgb(255, 0, 0) is red."""
+        return (r << 16) | (g << 8) | b
 
     @staticmethod
     def hsl(h, s, l):
+        """Build a color from hue (degrees 0..360), saturation and lightness (0..1).
+        hsl(0, 1, 0.5) is red, hsl(120, 1, 0.5) green, hsl(240, 1, 0.5) blue."""
+        h = (h % 360) / 360
         if s == 0:
             v = int(l * 255)
-            return (v, v, v)
+            return (v << 16) | (v << 8) | v
         q = l * (1 + s) if l < 0.5 else l + s - l * s
         p = 2 * l - q
-        t = h + 1/3
-        if t > 1: t -= 1
-        if t < 1/6:   r = p + (q-p)*6*t
-        elif t < 0.5: r = q
-        elif t < 2/3: r = p + (q-p)*(2/3-t)*6
-        else:         r = p
-        t = h
-        if t < 1/6:   g = p + (q-p)*6*t
-        elif t < 0.5: g = q
-        elif t < 2/3: g = p + (q-p)*(2/3-t)*6
-        else:         g = p
-        t = h - 1/3
-        if t < 0: t += 1
-        if t < 1/6:   b = p + (q-p)*6*t
-        elif t < 0.5: b = q
-        elif t < 2/3: b = p + (q-p)*(2/3-t)*6
-        else:         b = p
-        return (int(r*255), int(g*255), int(b*255))
-
-    @staticmethod
-    def mul(a, b):
-        return (a[0] * b[0] // 255, a[1] * b[1] // 255, a[2] * b[2] // 255)
-
-    @staticmethod
-    def add(a, b):
-        return (min(255, a[0] + b[0]), min(255, a[1] + b[1]), min(255, a[2] + b[2]))
+        return (int(_hue(p, q, h + 1/3) * 255) << 16
+                | int(_hue(p, q, h) * 255) << 8
+                | int(_hue(p, q, h - 1/3) * 255))
 
     @staticmethod
     def mix(a, b, t):
-        return (int(a[0] + (b[0] - a[0]) * t),
-                int(a[1] + (b[1] - a[1]) * t),
-                int(a[2] + (b[2] - a[2]) * t))
+        """Blend between two colors. t=0 gives a, t=1 gives b, 0.5 is halfway."""
+        ar, ag, ab = (a >> 16) & 0xFF, (a >> 8) & 0xFF, a & 0xFF
+        br, bg, bb = (b >> 16) & 0xFF, (b >> 8) & 0xFF, b & 0xFF
+        return (int(ar + (br - ar) * t) << 16
+                | int(ag + (bg - ag) * t) << 8
+                | int(ab + (bb - ab) * t))
+
+    @staticmethod
+    def scale(c, f):
+        """Dim or brighten a color. scale(c, 0.5) is half brightness, 0 is black."""
+        r = min(255, int(((c >> 16) & 0xFF) * f))
+        g = min(255, int(((c >> 8) & 0xFF) * f))
+        b = min(255, int((c & 0xFF) * f))
+        return (r << 16) | (g << 8) | b
+
+    @staticmethod
+    def add(a, b):
+        """Add two colors channel by channel, clamped (like mixing light)."""
+        return (min(255, ((a >> 16) & 0xFF) + ((b >> 16) & 0xFF)) << 16
+                | min(255, ((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) << 8
+                | min(255, (a & 0xFF) + (b & 0xFF)))
+
+def _hue(p, q, t):
+    if t < 0: t += 1
+    if t > 1: t -= 1
+    if t < 1/6:   return p + (q - p) * 6 * t
+    if t < 0.5:   return q
+    if t < 2/3:   return p + (q - p) * (2/3 - t) * 6
+    return p
 
 def lerp(a, b, t):
     return a + (b - a) * t
@@ -192,37 +272,22 @@ def start():
     _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_timer_cb)
     _timer_keys.start()
 
-# ── Scheduled callbacks and tweens ────────────────────────────────────────────
+# ── Scheduled callbacks ───────────────────────────────────────────────────────
 _scheduled    = []
-_tweens       = []  # [start_ms, duration_ms, start_clr, end_clr, key]
 _last_tick_ms = _time.ticks_ms()
 
 def delay(ms, fn):
     _scheduled.append([_time.ticks_add(_time.ticks_ms(), ms), fn])
 
 def tick():
-    """Fire scheduled callbacks and yield 10ms. Always returns True."""
+    """Recomposite LEDs, fire scheduled callbacks, yield 10ms. Always True."""
     global _last_tick_ms
     now = _time.ticks_ms()
     i = 0
     while i < len(_scheduled):
         if _time.ticks_diff(now, _scheduled[i][0]) >= 0:
-            fn = _scheduled.pop(i)[1]
-            fn()
+            _scheduled.pop(i)[1]()
         else:
-            i += 1
-    i = 0
-    while i < len(_tweens):
-        tw = _tweens[i]
-        elapsed = _time.ticks_diff(now, tw[0])
-        if elapsed >= tw[1]:
-            setColor(tw[4], tw[3])
-            _tweens.pop(i)
-        else:
-            t = elapsed / tw[1]
-            setColor(tw[4], (int(tw[2][0] + (tw[3][0] - tw[2][0]) * t),
-                             int(tw[2][1] + (tw[3][1] - tw[2][1]) * t),
-                             int(tw[2][2] + (tw[3][2] - tw[2][2]) * t)))
             i += 1
     _flush()
     if onUpdate:
@@ -333,7 +398,9 @@ except ImportError:
 
 # ── Exports ────────────────────────────────────────────────────────────────────
 __all__ = [
-    'NB_LEDS', 'clearAll', 'setColor', 'flashColor', 'fadeColor', 'color', 'lerp',
+    'NB_LEDS', 'clearAll', 'setColor', 'flashColor', 'fadeColor', 'blink', 'color', 'lerp',
+    'BLACK', 'WHITE', 'RED', 'GREEN', 'BLUE', 'YELLOW', 'CYAN', 'MAGENTA',
+    'ORANGE', 'PURPLE', 'PINK',
     'KEY_MENU', 'KEY_K1', 'KEY_K10',
     'down', 'press', 'release', 'hold',
     'waitPress', 'waitRelease', 'waitUntil',
