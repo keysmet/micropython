@@ -35,7 +35,10 @@
 #define MICROPY_PY_MACHINE_I2C      (1)
 #define MICROPY_PY_MACHINE_ADC      (1)
 #define MICROPY_PY_MACHINE_TEMP     (1)
-#define MICROPY_PY_MACHINE_I2S      (1)
+// No machine.I2S class: the `audio` module drives nrfx_i2s directly (see
+// modules/audio/modaudio.c), so it owns the I2S peripheral. Enabling the
+// generic class too would compile unused code and give nrfx_i2s two owners.
+#define MICROPY_PY_MACHINE_I2S      (0)
 #define MICROPY_PY_AUDIO            (1)
 
 #define MICROPY_HW_ENABLE_RNG       (1)
