@@ -4,6 +4,7 @@ from machine import Pin, Timer
 from neopixel import NeoPixel
 import machine
 import time as _time
+import sys as _sys
 
 from pins import *
 
@@ -17,7 +18,6 @@ np      = NeoPixel(Pin(PIN_LED), NB_LEDS)
 
 # On the real device, LEDs are perceptually corrected (f² gamma) so mid-tones
 # match the linear sim. The sim writes colors straight through.
-import sys as _sys
 _GAMMA = _sys.platform.startswith("nrf")   # True on device, False in the sim
 
 def _pix(key):
@@ -334,49 +334,33 @@ def restart():
     machine.soft_reset()
 
 # ── Public key API ─────────────────────────────────────────────────────────────
-def down(*keys):
-    """Returns a pressed key number (True for MENU), or False."""
-    if not keys:
-        for i in range(1, _KEY_COUNT):
-            if _keys[i].down: return i
-        return False
-    for k in keys:
-        if _keys[k].down: return k or True  # KEY_MENU=0 serait falsy sans ce or True
+# down/press/release share one shape: with no args, scan K1..K10; with args,
+# check just those keys. `field` is the Key attribute to test ("down"/"pressed"/
+# "released"); `consume` clears it (edge events fire once). The result is the key
+# number, or True for MENU (key 0 is falsy, so a bare number wouldn't read true).
+def _query(keys, field, consume):
+    for k in keys if keys else range(1, _KEY_COUNT):
+        if getattr(_keys[k], field):
+            if consume: setattr(_keys[k], field, 0)
+            return k or True
     return False
+
+def down(*keys):
+    """Key number currently held (True for MENU), or False."""
+    return _query(keys, "down", False)
 
 def press(*keys):
-    """Returns key number on press (True for MENU, consumes event), or False."""
-    if not keys:
-        for i in range(1, _KEY_COUNT):
-            if _keys[i].pressed:
-                _keys[i].pressed = 0
-                return i
-        return False
-    for k in keys:
-        if _keys[k].pressed:
-            _keys[k].pressed = 0
-            return k or True  # KEY_MENU=0 serait falsy sans ce or True
-    return False
+    """Key number on its press edge (True for MENU), consumed on read, or False."""
+    return _query(keys, "pressed", True)
 
 def release(*keys):
-    """Returns key number on release (True for MENU, consumes event), or False."""
-    if not keys:
-        for i in range(1, _KEY_COUNT):
-            if _keys[i].released:
-                _keys[i].released = 0
-                return i
-        return False
-    for k in keys:
-        if _keys[k].released:
-            _keys[k].released = 0
-            return k or True  # KEY_MENU=0 serait falsy sans ce or True
-    return False
+    """Key number on its release edge (True for MENU), consumed on read, or False."""
+    return _query(keys, "released", True)
 
 def hold(key, ms):
+    """True while `key` has been held down for at least `ms` milliseconds."""
     k = _keys[key]
-    if not k.down:
-        return False
-    return _time.ticks_diff(_time.ticks_ms(), k.hold_ms) >= ms
+    return bool(k.down) and _time.ticks_diff(_time.ticks_ms(), k.hold_ms) >= ms
 
 def wait(ms):
     deadline = _time.ticks_add(_time.ticks_ms(), ms)
