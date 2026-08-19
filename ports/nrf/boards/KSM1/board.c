@@ -2,19 +2,13 @@
  * KSM1 board early init and VM hook
  *
  * Sets REGOUT0 to 3.3V on first boot (required for SK6812 LEDs).
- * Shutdown/wake logic is handled in freeze/main.py (runs after MicroPython
- * is fully initialized, so I2C works reliably there).
+ * All boot/shutdown/wake logic lives in freeze/main.py (it runs after MicroPython
+ * is fully initialized, so I2C to the EEPROM works). Boot intent is stored in an
+ * EEPROM byte, not GPREGRET — reading NRF_POWER->GPREGRET via machine.mem32
+ * hard-faults on this board.
  *
- * KSM1_vm_hook() is called by MICROPY_VM_HOOK_LOOP every 200 bytecodes.
- * It processes pending USB CDC data (so Ctrl+C interrupts tight Python loops)
- * and owns the power-off gesture: a 2s MENU hold, detected here so it works
- * even inside a hung Python loop that never cooperates with the scanner.
- *
- * GPREGRET is a one-reset intent latch (survives reset + System OFF wake, and
- * the Adafruit bootloader passes it through unless it is the 0x57 UF2 magic):
- *   0xA1 RUN_USER  — main.py runs /eeprom/app.py once, then clears the flag
- *   0xA2 POWER_OFF — main.py enters System OFF, then clears the flag
- *   0x57 BOOTLOADER — reserved Adafruit UF2 magic; never write it here
+ * KSM1_vm_hook() is called by MICROPY_VM_HOOK_LOOP every 200 bytecodes; it only
+ * drains USB CDC (so Ctrl+C interrupts tight loops) and runs pending callbacks.
  */
 
 #include "nrf.h"
@@ -27,49 +21,20 @@
 #endif
 #endif
 
-#define KSM1_MENU_PORT1_BIT     (10u)     // MENU = P1.10
-#define KSM1_HOLD_MS_POWER_OFF  (2000u)
-#define KSM1_GPREGRET_POWER_OFF (0xA2u)
-
-// MENU reads low when pressed (active-low, PULL_UP).
-static inline bool ksm1_menu_down(void) {
-    return (NRF_P1->IN & (1u << KSM1_MENU_PORT1_BIT)) == 0;
-}
-
 void KSM1_vm_hook(void) {
-    static uint32_t hold_start_ms = 0;
-    static bool was_down = false;
-
-    // 1. Drain any USB CDC data that didn't fit in the ring buffer when it arrived.
-    //    tud_cdc_rx_cb already called mp_sched_keyboard_interrupt() for Ctrl+C bytes;
-    //    this just ensures nothing is stranded if the buffer was temporarily full.
+    // Drain any USB CDC data that didn't fit in the ring buffer when it arrived.
+    // tud_cdc_rx_cb already called mp_sched_keyboard_interrupt() for Ctrl+C bytes;
+    // this just ensures nothing is stranded if the buffer was temporarily full.
     mp_usbd_cdc_poll_interfaces(0);
 
-    // 2. Power-off gesture: MENU held 2s. Runs from the VM hook so it works even
-    //    when user Python is stuck in a tight loop. On trigger, latch POWER_OFF
-    //    and reset — but only AFTER MENU is released, so main.py never boots the
-    //    power-off path with MENU still down (that double-edge stuck the board on
-    //    the earlier attempt). This is the single owner of power-off.
-    if (ksm1_menu_down()) {
-        uint32_t now = mp_hal_ticks_ms();
-        if (!was_down) {
-            was_down = true;
-            hold_start_ms = now;
-        } else if ((uint32_t)(now - hold_start_ms) >= KSM1_HOLD_MS_POWER_OFF) {
-            NRF_POWER->GPREGRET = KSM1_GPREGRET_POWER_OFF;
-            while (ksm1_menu_down()) {
-                // spin until released, then reset into the power-off boot
-            }
-            __disable_irq();
-            NVIC_SystemReset();
-        }
-    } else {
-        was_down = false;
-    }
-
-    // 3. Process the pending KeyboardInterrupt (or any other scheduled event).
-    //    This is what actually raises the exception inside the Python VM.
+    // Process the pending KeyboardInterrupt (or any other scheduled event) — this
+    // is what actually raises the exception inside the Python VM, and runs the
+    // ksm key-scan timer callback.
     mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
+
+    // Note: power-off (2s MENU hold) is owned by Python (ksm.py's scanner latches
+    // it, main.py runs the shutdown), because latching the boot intent needs I2C
+    // to the EEPROM — impossible from here. See freeze/main.py.
 }
 
 void KSM1_board_enter_bootloader(void) {

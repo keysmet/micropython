@@ -227,6 +227,11 @@ _menu_press_last  = 0
 _menu_triple      = False
 _TRIPLE_WINDOW_MS = 500
 
+# 2s MENU-hold power-off: the scanner just latches this flag; main.py polls it
+# (menu_power_off()) and owns the whole shutdown sequence. Keeps all the boot/
+# power logic in one place instead of the scanner reaching back into main.
+_menu_power_off = False
+
 _timer_keys = None  # keeps the Timer object alive (GC would stop it)
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
@@ -278,8 +283,12 @@ def _scan_keys():
         elif edge == -1:                       # release
             if _keys[i].is_tap(now): _fire(tap, i)
             _fire(release, i)
-    # Power off (2s MENU hold) is owned by board.c's VM hook, so it works even
-    # when this cooperative scanner isn't running — nothing to do here.
+    # Power off: MENU held 2s → just latch a flag. main.py polls menu_power_off()
+    # and runs the actual shutdown (which needs I2C to the EEPROM, unsafe here in
+    # the timer callback anyway).
+    global _menu_power_off
+    if hold(KEY_MENU, 2000):
+        _menu_power_off = True
 
 def _timer_cb(t):
     _scan_keys()
@@ -288,6 +297,14 @@ def start():
     global _timer_keys
     _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_timer_cb)
     _timer_keys.start()
+
+def stop():
+    """Stop the key-scan timer. Used before cutting power so the ISR can't run
+    while we reconfigure pins / enter System OFF."""
+    global _timer_keys
+    if _timer_keys is not None:
+        _timer_keys.deinit()
+        _timer_keys = None
 
 # ── Scheduled callbacks ───────────────────────────────────────────────────────
 _scheduled    = []
@@ -387,6 +404,10 @@ def menu_triple_press():
         _menu_triple = False
         return True
     return False
+
+def menu_power_off():
+    """True once MENU has been held 2s. main.py runs the shutdown. Internal."""
+    return _menu_power_off
 
 # ── USB HID ────────────────────────────────────────────────────────────────────
 # hid_keys([keycode, ...], modifier=0) — send a USB HID keyboard report.

@@ -1,43 +1,58 @@
-from machine import Pin
+from machine import Pin, I2C
 import time
 import machine
 import ksm
 
-# ── Boot intent latch (GPREGRET) ─────────────────────────────────────────────
-# GPREGRET is a retained register: it survives reset AND System OFF wake, and
-# the Adafruit bootloader passes it through (unless it is the 0x57 UF2 magic).
-# It is the ONLY thing main.py reads to decide what kind of boot this is:
-#   RUN_USER  — MENU mode launched a script
-#   POWER_OFF — board.c saw the 2s MENU hold; go to System OFF
-#   SLEEPING  — set by _system_off() just before sleeping; means "this boot is a
-#               wake from System OFF", so run the hold-to-confirm gate
-#   0 / other — a normal boot (fresh power, reset, crash, triple-press exit) → MENU
-# We read it once, clear it immediately (so a crash/reset loop can't repeat a
-# stuck boot), then act. No other signal (MENU pin, RESETREAS) gates the flow —
-# a boot with MENU held only matters when GPREGRET says we were SLEEPING.
-NRF_POWER_GPREGRET = 0x4000051C
-GPREGRET_RUN_USER  = 0xA1
-GPREGRET_POWER_OFF = 0xA2
-GPREGRET_SLEEPING  = 0xA3
+# main.py is DEVICE-ONLY — the WASM sim runs ksm.py but never this file. So all
+# the hardware boot/power/EEPROM/System-OFF logic lives here, kept simple; ksm.py
+# stays clean and shared. (The scanner only *latches* the 2s-hold; the actual
+# shutdown is owned here.)
 
-_intent = machine.mem32[NRF_POWER_GPREGRET]
-machine.mem32[NRF_POWER_GPREGRET] = 0
+# ── Boot intent latch (EEPROM byte) ──────────────────────────────────────────
+# We remember the boot intent in one reserved EEPROM byte instead of GPREGRET.
+# Reading NRF_POWER->GPREGRET via machine.mem32 hard-faults on this board (resets
+# the chip in a ~1s loop), so we avoid that register entirely. The EEPROM sits on
+# the always-on VDD rail, so the byte survives System OFF and reset just like a
+# retention register would. LittleFS starts at block 2 (byte 0x200); bytes below
+# that are reserved, so byte 0x0000 is ours.
+#   RUN_USER  (0xA1) — MENU mode launched a script; run it once on this boot
+#   SLEEPING  (0xA3) — set by _system_off() before sleeping; this boot is a wake
+#   0x00 / 0xFF / other — a normal boot (fresh power, reset, crash) → MENU
+# (Power-off no longer round-trips through the EEPROM: the 2s-hold sequence calls
+#  _system_off() directly, so there is no POWER_OFF intent.)
+EEPROM_ADDR        = 0x50
+INTENT_ADDR        = 0x0000
+INTENT_RUN_USER    = 0xA1
+INTENT_SLEEPING    = 0xA3
 
-# /eeprom is mounted by _boot.py before main.py runs, on every boot/soft-reset,
-# and it also drives PWR_ON high — so the power rail and EEPROM are already up.
+_i2c = I2C(0, scl=Pin(ksm.PIN_I2C_SCL), sda=Pin(ksm.PIN_I2C_SDA))
+
+def _intent_read():
+    _i2c.writeto(EEPROM_ADDR, bytes([INTENT_ADDR >> 8, INTENT_ADDR & 0xFF]))
+    return _i2c.readfrom(EEPROM_ADDR, 1)[0]
+
+def _intent_write(v):
+    _i2c.writeto(EEPROM_ADDR, bytes([INTENT_ADDR >> 8, INTENT_ADDR & 0xFF, v]))
+    time.sleep_ms(10)   # EEPROM write cycle
+
+_intent = _intent_read()
+_intent_write(0x00)     # clear immediately — a crash/reset loop can't replay it
 
 # ── System OFF ───────────────────────────────────────────────────────────────
 # Cuts the switched rail (LEDs/audio/IMU via PWR_ON) and puts the nRF in System
 # OFF (~µA). EEPROM and the nRF core stay on the always-on VDD rail. Wakes on a
 # MENU press, which cold-boots back into main.py. Never returns.
-
 def _system_off():
     NRF_P1_PIN_CNF_MENU          = 0x50000A28  # P1 PIN_CNF[10] — MENU
     NRF_P1_LATCH                 = 0x50000820  # P1 LATCH — clear stale DETECT
     NRF_POWER_SYSTEMOFF          = 0x40000500  # POWER.SYSTEMOFF
     NRF_PIN_CNF_PULLUP_SENSE_LOW = 0x0003000C  # pull-up + sense low
 
+    # Latch SLEEPING first (EEPROM write needs I2C, done before we release it).
+    _intent_write(INTENT_SLEEPING)
     ksm.clearAll()
+    Pin(ksm.PIN_PWR_LED, Pin.OUT).value(0)  # power LED off (it's on the always-on
+                                            # rail, so System OFF won't clear it)
     # Wake on MENU low.
     machine.mem32[NRF_P1_PIN_CNF_MENU] = NRF_PIN_CNF_PULLUP_SENSE_LOW
     machine.mem32[NRF_P1_LATCH] = 0xFFFFFFFF
@@ -46,24 +61,35 @@ def _system_off():
     Pin(ksm.PIN_I2C_SDA, Pin.IN)
     Pin(ksm.PIN_I2C_SCL, Pin.IN)
     Pin(ksm.PIN_PWR_ON, Pin.OUT).value(0)   # cut LEDs/audio/IMU rail (not EEPROM)
-    # Latch SLEEPING so the next boot (a wake) runs the hold-to-confirm gate.
-    # Survives System OFF; cleared by main.py on that next boot.
-    machine.mem32[NRF_POWER_GPREGRET] = GPREGRET_SLEEPING
     machine.mem32[NRF_POWER_SYSTEMOFF] = 1  # never returns
 
-# ── Power-off request from the board (2s MENU hold) ──────────────────────────
-if _intent == GPREGRET_POWER_OFF:
-    _system_off()
+# ── Power-down sequence (2s MENU hold), owned here ───────────────────────────
+# Red flash across all keys as "powering off" feedback (like the Arduino), wait
+# for MENU release, then go straight to System OFF — no reboot. Sleeping directly
+# avoids the boot window where the DAC/amp are powered but undriven (the audible
+# glitch). The scan timer is stopped first so its ISR can't run while we cut power.
+def _power_off():
+    for i in range(ksm.NB_LEDS):
+        ksm.setColor(i, ksm.RED)
+    ksm.tick()
+    time.sleep_ms(500)
+    ksm.clearAll()
+    ksm.tick()
+    # Wait for MENU release using the scanner's own state (like the Arduino) — do
+    # NOT create a second Pin on MENU; the scan timer already owns that GPIO.
+    while ksm.down(ksm.KEY_MENU):
+        time.sleep_ms(20)
+    ksm.stop()          # halt the scan ISR before touching pins / cutting power
+    _system_off()       # never returns
 
 # ── Wake confirmation ────────────────────────────────────────────────────────
-# Only a wake from System OFF reaches here (GPREGRET == SLEEPING, set by
-# _system_off before it slept). The MENU press that woke us is still held;
-# require a full 1s hold to confirm — a brush against MENU in a bag shouldn't
-# power the board up. Released too early → straight back to System OFF.
-# Silent (no LEDs) while confirming. Every other boot (fresh power, reset, crash,
-# triple-press exit, launch with MENU held) has a different intent and skips this
-# entirely — the MENU pin is never consulted, so nothing here fires on a non-wake.
-if _intent == GPREGRET_SLEEPING:
+# Only a wake from System OFF reaches here (intent == SLEEPING). The MENU press
+# that woke us is still held; require a full 1s hold to confirm. Released early →
+# straight back to System OFF. Power LED on during the confirm; a short blue
+# flash (like the Arduino) once we commit to booting.
+if _intent == INTENT_SLEEPING:
+    _pwr_led = Pin(ksm.PIN_PWR_LED, Pin.OUT)
+    _pwr_led.value(1)
     _menu = Pin(ksm.PIN_MENU, Pin.IN, Pin.PULL_UP)
     _HOLD_MS = 1000
     _start = time.ticks_ms()
@@ -73,18 +99,23 @@ if _intent == GPREGRET_SLEEPING:
         time.sleep_ms(20)
     else:
         _system_off()                             # released before the hold
+    # Confirmed: 3× blue flash as the "powering on" cue.
+    for _ in range(3):
+        for i in range(ksm.NB_LEDS):
+            ksm.setColor(i, 0x000030)
+        ksm.tick()
+        time.sleep_ms(50)
+        ksm.clearAll()
+        time.sleep_ms(50)
 
 # ── Start the cooperative key scanner ────────────────────────────────────────
 ksm.start()
 
 # ── USER mode: run /eeprom/app.py once (RUN_USER intent) ──────────────────────
-# Reached only when MENU mode launched the script. Any other boot — fresh power,
-# crash, watchdog, soft reset — has no RUN_USER flag and falls through to MENU,
-# so a bad script can never trap the board: it runs once, and you return to MENU.
 _CALLBACKS = ('onPress', 'onRelease', 'onTap', 'onUpdate',
               'onMenuPress', 'onMenuRelease', 'onMenuTap')
 
-if _intent == GPREGRET_RUN_USER:
+if _intent == INTENT_RUN_USER:
     _setup = None
     _loop = None
     try:
@@ -114,14 +145,13 @@ if _intent == GPREGRET_RUN_USER:
                 print("loop() error:", e)
                 _loop = None            # stop calling after a crash
         ksm.tick()                      # scheduled callbacks + onUpdate + 10ms yield
+        if ksm.menu_power_off():        # MENU held 2s → power off
+            _power_off()
         if ksm.menu_triple_press():     # triple-press MENU → back to MENU mode
             print("Exiting to MENU.")
             machine.reset()
 
 # ── MENU mode: idle until a key launches the user script ──────────────────────
-# Any key press loads the user script (via a clean reboot into RUN_USER). If
-# there is no script on the board, a press does nothing. USB/REPL stays live the
-# whole time, so uploads and recovery always work here.
 _has_app = False
 try:
     open('/eeprom/app.py').close()
@@ -137,7 +167,9 @@ while True:
     _t = (_t + 1) % 20
     ksm.setColor(ksm.KEY_MENU, 0x140800 if _t < 10 else 0)   # slow orange standby pulse
     ksm.wait(50)                        # wait() runs tick(), which flushes LEDs
+    if ksm.menu_power_off():            # MENU held 2s → power off
+        _power_off()
     if _has_app and ksm.press():        # any K1..K10
         print("Launching user script...")
-        machine.mem32[NRF_POWER_GPREGRET] = GPREGRET_RUN_USER
+        _intent_write(INTENT_RUN_USER)
         machine.reset()
