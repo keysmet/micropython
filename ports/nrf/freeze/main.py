@@ -8,22 +8,21 @@ import ksm
 # stays clean and shared. (The scanner only *latches* the 2s-hold; the actual
 # shutdown is owned here.)
 
-# ── Boot intent latch (EEPROM byte) ──────────────────────────────────────────
-# We remember the boot intent in one reserved EEPROM byte instead of GPREGRET.
-# Reading NRF_POWER->GPREGRET via machine.mem32 hard-faults on this board (resets
-# the chip in a ~1s loop), so we avoid that register entirely. The EEPROM sits on
-# the always-on VDD rail, so the byte survives System OFF and reset just like a
-# retention register would. LittleFS starts at block 2 (byte 0x200); bytes below
-# that are reserved, so byte 0x0000 is ours.
-#   RUN_USER  (0xA1) — MENU mode launched a script; run it once on this boot
-#   SLEEPING  (0xA3) — set by _system_off() before sleeping; this boot is a wake
-#   0x00 / 0xFF / other — a normal boot (fresh power, reset, crash) → MENU
-# (Power-off no longer round-trips through the EEPROM: the 2s-hold sequence calls
-#  _system_off() directly, so there is no POWER_OFF intent.)
+# ── Wake latch (EEPROM byte) ─────────────────────────────────────────────────
+# One reserved EEPROM byte remembers "we are asleep" across System OFF, instead
+# of GPREGRET — reading NRF_POWER->GPREGRET via machine.mem32 hard-faults on this
+# board (resets the chip in a ~1s loop), so we avoid that register. The EEPROM is
+# on the always-on VDD rail, so the byte survives System OFF like a retention
+# register. LittleFS starts at block 2 (byte 0x200); bytes below are reserved, so
+# byte 0x0000 is ours.
+#   SLEEPING (0xA3) — set by _system_off() before sleeping; this boot is a wake.
+#   MENU     (0xA2) — triple-press exit asked for MENU mode; don't auto-run.
+#   anything else   — a normal boot (fresh power, reset, crash) → auto-run.
+# Power-off is decided live (2s hold), not latched.
 EEPROM_ADDR        = 0x50
 INTENT_ADDR        = 0x0000
-INTENT_RUN_USER    = 0xA1
 INTENT_SLEEPING    = 0xA3
+INTENT_MENU        = 0xA2
 
 _i2c = I2C(0, scl=Pin(ksm.PIN_I2C_SCL), sda=Pin(ksm.PIN_I2C_SDA))
 
@@ -111,11 +110,31 @@ if _intent == INTENT_SLEEPING:
 # ── Start the cooperative key scanner ────────────────────────────────────────
 ksm.start()
 
-# ── USER mode: run /eeprom/app.py once (RUN_USER intent) ──────────────────────
+# ── Decide: user script or MENU mode ─────────────────────────────────────────
+# By default boot straight into the user script if there is one. Force MENU mode
+# instead when either: a K1..K10 is held at boot (recovery / upload), or the last
+# reset asked for it (triple-press exit set INTENT_MENU). MENU is NOT a key
+# trigger — it's the power/wake button, naturally held right after waking.
+# User Python errors are caught (try/except below), so a buggy script can't trap
+# the board; you can still triple-press MENU or 2s-hold to power off.
+_has_app = False
+try:
+    open('/eeprom/app.py').close()
+    _has_app = True
+except OSError:
+    pass
+
+# Any K1..K10 held at boot? Give the scan timer a moment to read the pins, then
+# ask the ksm API.
+time.sleep_ms(30)
+_key_held = any(ksm.down(k) for k in range(1, 11))
+_run_user = _has_app and not _key_held and _intent != INTENT_MENU
+
+# ── USER mode: run /eeprom/app.py ────────────────────────────────────────────
 _CALLBACKS = ('onPress', 'onRelease', 'onTap', 'onUpdate',
               'onMenuPress', 'onMenuRelease', 'onMenuTap')
 
-if _intent == INTENT_RUN_USER:
+if _run_user:
     _setup = None
     _loop = None
     try:
@@ -149,18 +168,24 @@ if _intent == INTENT_RUN_USER:
             _power_off()
         if ksm.menu_triple_press():     # triple-press MENU → back to MENU mode
             print("Exiting to MENU.")
+            _intent_write(INTENT_MENU)  # so the reset lands in MENU, not auto-run
             machine.reset()
 
 # ── MENU mode: idle until a key launches the user script ──────────────────────
-_has_app = False
-try:
-    open('/eeprom/app.py').close()
-    _has_app = True
-except OSError:
-    pass
-
+# Reached when there's no app, or a key was held at boot to force MENU. Pressing
+# a key launches the script — via a keyless reboot (a plain reset boots straight
+# into the script now), so we wait for release first, else the boot-time
+# key-held check would just bounce back to MENU.
 print("MENU mode. Press any key to run your script." if _has_app
       else "MENU mode. No app.py — upload one to /eeprom/app.py.")
+
+# If a key was held at boot to reach MENU, wait for it to be released and clear
+# any pending press edges, so letting go doesn't immediately launch the script.
+while ksm.down():
+    ksm.wait(20)
+ksm.wait(50)                            # let the release edge settle
+while ksm.press():                      # drain any latched press edges
+    pass
 
 _t = 0
 while True:
@@ -171,5 +196,6 @@ while True:
         _power_off()
     if _has_app and ksm.press():        # any K1..K10
         print("Launching user script...")
-        _intent_write(INTENT_RUN_USER)
-        machine.reset()
+        while ksm.down():               # wait for all keys released
+            ksm.wait(20)
+        machine.reset()                 # keyless reboot → auto-runs the script
