@@ -70,15 +70,14 @@ def _system_off():
 def _power_off():
     for i in range(ksm.NB_LEDS):
         ksm.setColor(i, ksm.RED)
-    ksm.tick()
-    time.sleep_ms(500)
+    ksm.wait(500)       # wait() ticks: scans keys + holds the red flash
     ksm.clearAll()
     ksm.tick()
     # Wait for MENU release using the scanner's own state (like the Arduino) — do
-    # NOT create a second Pin on MENU; the scan timer already owns that GPIO.
+    # NOT create a second Pin on MENU. Keys are scanned in tick(), so poll via it.
     while ksm.down(ksm.KEY_MENU):
-        time.sleep_ms(20)
-    ksm.stop()          # halt the scan ISR before touching pins / cutting power
+        ksm.tick()
+    ksm.stop()          # disarm the hang watchdog before we stop ticking to cut power
     _system_off()       # never returns
 
 # ── Wake confirmation ────────────────────────────────────────────────────────
@@ -124,9 +123,11 @@ try:
 except OSError:
     pass
 
-# Any K1..K10 held at boot? Give the scan timer a moment to read the pins, then
+# Any K1..K10 held at boot? Tick a few times to let the pins settle and update
+# key state (scanning happens in tick() now — there is no background timer), then
 # ask the ksm API.
-time.sleep_ms(30)
+for _ in range(3):
+    ksm.tick()
 _key_held = any(ksm.down(k) for k in range(1, 11))
 _run_user = _has_app and not _key_held and _intent != INTENT_MENU
 

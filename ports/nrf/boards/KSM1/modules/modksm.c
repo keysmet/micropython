@@ -1,20 +1,36 @@
-// modksm.c — USB HID interface for KSM1 (keyboard + gamepad + consumer)
+// modksm.c — native helpers for KSM1, exposed via the `hid` built-in module
 //
-// Exposes three functions via the `hid` built-in module:
-//   hid.hid_keys([keycodes], modifier=0)  — keyboard report (report ID 1)
-//   hid.hid_gamepad(bitmask)              — gamepad report  (report ID 2)
-//   hid.hid_consumer(usage)               — consumer/media  (report ID 3)
-//
-// Consumed by freeze/keyboard.py and freeze/gamepad.py respectively.
+// USB HID (report ID in parens), consumed by freeze/keyboard.py + gamepad.py:
+//   hid.hid_keys([keycodes], modifier=0)  — keyboard report (1)
+//   hid.hid_gamepad(bitmask)              — gamepad report  (2)
+//   hid.hid_consumer(usage)               — consumer/media  (3)
 // Keycodes: USB HID usage page 0x07 (4=A, 40=Enter, 44=Space, 80=Left arrow)
+//
+// Hang watchdog (see boards/KSM1/board.c), used by freeze/ksm.py:
+//   hid.feed()    — ksm.tick() calls this each yield; missing it for ~1s reboots to MENU
+//   hid.disarm()  — main.py calls this before the shutdown sequence stops ticking
 
 #include "py/runtime.h"
 #include "py/obj.h"
+#include "mpconfigboard.h"   // KSM1_watchdog_feed / KSM1_watchdog_disarm
 #if MICROPY_HW_USB_HID
 #ifndef NO_QSTR
 #include "tusb.h"
 #endif
 #endif
+
+// ── hid.feed() / hid.disarm() — hang watchdog control ────────────────────────
+static mp_obj_t hid_feed(void) {
+    KSM1_watchdog_feed();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(hid_feed_obj, hid_feed);
+
+static mp_obj_t hid_disarm(void) {
+    KSM1_watchdog_disarm();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(hid_disarm_obj, hid_disarm);
 
 // ── hid.hid_keys([keycode, ...], modifier=0) ─────────────────────────────────
 // Send a USB HID keyboard report. Pass an empty list [] to release all keys.
@@ -74,6 +90,8 @@ static MP_DEFINE_CONST_FUN_OBJ_1(hid_hid_consumer_obj, hid_hid_consumer);
 
 static const mp_rom_map_elem_t hid_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_hid) },
+    { MP_ROM_QSTR(MP_QSTR_feed),         MP_ROM_PTR(&hid_feed_obj) },
+    { MP_ROM_QSTR(MP_QSTR_disarm),       MP_ROM_PTR(&hid_disarm_obj) },
     #if MICROPY_HW_USB_HID
     { MP_ROM_QSTR(MP_QSTR_hid_keys),     MP_ROM_PTR(&hid_hid_keys_obj) },
     { MP_ROM_QSTR(MP_QSTR_hid_gamepad),  MP_ROM_PTR(&hid_hid_gamepad_obj) },

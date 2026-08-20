@@ -1,5 +1,5 @@
 /*
- * KSM1 board early init and VM hook
+ * KSM1 board early init, VM hook, and hang watchdog
  *
  * Sets REGOUT0 to 3.3V on first boot (required for SK6812 LEDs).
  * All boot/shutdown/wake logic lives in freeze/main.py (it runs after MicroPython
@@ -7,8 +7,19 @@
  * EEPROM byte, not GPREGRET — reading NRF_POWER->GPREGRET via machine.mem32
  * hard-faults on this board.
  *
- * KSM1_vm_hook() is called by MICROPY_VM_HOOK_LOOP every 200 bytecodes; it only
- * drains USB CDC (so Ctrl+C interrupts tight loops) and runs pending callbacks.
+ * KSM1_vm_hook() is called by MICROPY_VM_HOOK_LOOP every 200 bytecodes. It drains
+ * USB CDC (so Ctrl+C interrupts tight loops), runs pending callbacks, and runs the
+ * hang watchdog. There is no background key-scan timer: keys are scanned inside
+ * ksm.tick() (the single cooperative yield point). A well-behaved script calls
+ * tick() regularly; each call feeds the watchdog (KSM1_watchdog_feed, wired from
+ * the `hid` module — see modksm.c / freeze/ksm.py). If tick() is not called for
+ * KSM1_WATCHDOG_MS, the script is stuck in a non-yielding loop: we write the MENU
+ * boot intent to the EEPROM and reset, so the board recovers into MENU mode
+ * instead of hanging until the battery dies.
+ *
+ * Writing the EEPROM from here is safe: the VM hook runs *between* bytecodes on the
+ * main thread (it is not an interrupt), so the I2C bus is idle — unlike the old
+ * key-scan Timer ISR, which is why intent-latching was kept out of it before.
  */
 
 #include "nrf.h"
@@ -21,6 +32,46 @@
 #endif
 #endif
 
+// ── Hang watchdog ────────────────────────────────────────────────────────────
+// Must match freeze/main.py: EEPROM at 0x50, intent byte at address 0x0000,
+// INTENT_MENU = 0xA2, and the EEPROM lives on I2C(0).
+#define KSM1_WATCHDOG_MS        (1000u)
+#define KSM1_EEPROM_I2C_ID      (0)
+#define KSM1_EEPROM_ADDR        (0x50)
+#define KSM1_INTENT_ADDR        (0x0000)
+#define KSM1_INTENT_MENU        (0xA2)
+
+// Blocking raw I2C TX on a configured TWI instance (defined in modules/machine/i2c.c).
+extern int machine_hard_i2c_raw_tx(int id, uint16_t addr, const uint8_t *buf, size_t len);
+
+// Last time ksm.tick() fed the watchdog. 0 = never fed yet (watchdog disabled
+// until the first tick, so it can't fire during boot/import before the app runs).
+static uint32_t ksm1_last_feed_ms = 0;
+
+void KSM1_watchdog_feed(void) {
+    uint32_t now = mp_hal_ticks_ms();
+    if (now == 0) {
+        now = 1;   // 0 is the "never fed" sentinel; keep the watchdog armed
+    }
+    ksm1_last_feed_ms = now;
+}
+
+// Disarm the watchdog (back to the "never fed" state). main.py calls this before
+// the power-off / System OFF sequence, which intentionally stops calling tick()
+// while it cuts power — the watchdog must not reboot us mid-shutdown.
+void KSM1_watchdog_disarm(void) {
+    ksm1_last_feed_ms = 0;
+}
+
+static void ksm1_watchdog_reboot_to_menu(void) {
+    // Latch MENU intent so the reboot lands in MENU mode instead of re-running the
+    // (hung) script and hanging again. main.py reads and clears this byte at boot.
+    uint8_t frame[3] = { KSM1_INTENT_ADDR >> 8, KSM1_INTENT_ADDR & 0xFF, KSM1_INTENT_MENU };
+    machine_hard_i2c_raw_tx(KSM1_EEPROM_I2C_ID, KSM1_EEPROM_ADDR, frame, sizeof(frame));
+    mp_hal_delay_ms(10);   // EEPROM write cycle must complete before we reset
+    NVIC_SystemReset();
+}
+
 void KSM1_vm_hook(void) {
     // Drain any USB CDC data that didn't fit in the ring buffer when it arrived.
     // tud_cdc_rx_cb already called mp_sched_keyboard_interrupt() for Ctrl+C bytes;
@@ -28,13 +79,16 @@ void KSM1_vm_hook(void) {
     mp_usbd_cdc_poll_interfaces(0);
 
     // Process the pending KeyboardInterrupt (or any other scheduled event) — this
-    // is what actually raises the exception inside the Python VM, and runs the
-    // ksm key-scan timer callback.
+    // is what actually raises the exception inside the Python VM.
     mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
 
-    // Note: power-off (2s MENU hold) is owned by Python (ksm.py's scanner latches
-    // it, main.py runs the shutdown), because latching the boot intent needs I2C
-    // to the EEPROM — impossible from here. See freeze/main.py.
+    // Hang watchdog: if ksm.tick() hasn't fed us for KSM1_WATCHDOG_MS, the script
+    // is stuck in a non-yielding loop → reboot into MENU. Disabled until the first
+    // feed (ksm1_last_feed_ms == 0) so boot/import can't trip it.
+    if (ksm1_last_feed_ms != 0 &&
+        (uint32_t)(mp_hal_ticks_ms() - ksm1_last_feed_ms) > KSM1_WATCHDOG_MS) {
+        ksm1_watchdog_reboot_to_menu();
+    }
 }
 
 void KSM1_board_enter_bootloader(void) {

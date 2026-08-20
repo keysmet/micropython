@@ -1,12 +1,25 @@
 # ksm.py — public hardware API for KSM1
 
-from machine import Pin, Timer
+from machine import Pin
 from neopixel import NeoPixel
 import machine
 import time as _time
 import sys as _sys
 
 from pins import *
+
+# ── Hang watchdog (firmware) ───────────────────────────────────────────────────
+# tick() feeds the firmware watchdog (board.c) so a non-yielding loop reboots to
+# MENU; start()/stop() disarm it around boot and shutdown. On the sim there is no
+# `hid` module; its watchdog (mp_js_hook) is fed by sleep_ms instead, so feed and
+# disarm are no-ops there.
+try:
+    from hid import feed as _watchdog_feed, disarm as _watchdog_disarm
+except ImportError:
+    def _watchdog_feed():
+        pass
+    def _watchdog_disarm():
+        pass
 
 # ── NeoPixels ──────────────────────────────────────────────────────────────────
 # Each key is an Led (below), recomposited every tick (no scheduled callbacks):
@@ -232,8 +245,6 @@ _TRIPLE_WINDOW_MS = 500
 # power logic in one place instead of the scanner reaching back into main.
 _menu_power_off = False
 
-_timer_keys = None  # keeps the Timer object alive (GC would stop it)
-
 # ── Event callbacks ────────────────────────────────────────────────────────────
 # main.py wires these from the app namespace after loading app.py.
 # Can also be set directly: ksm.onPress = my_fn
@@ -284,27 +295,25 @@ def _scan_keys():
             if _keys[i].is_tap(now): _fire(tap, i)
             _fire(release, i)
     # Power off: MENU held 2s → just latch a flag. main.py polls menu_power_off()
-    # and runs the actual shutdown (which needs I2C to the EEPROM, unsafe here in
-    # the timer callback anyway).
+    # and runs the actual shutdown (which needs I2C to the EEPROM, unsafe from
+    # inside tick()'s fast path).
     global _menu_power_off
     if hold(KEY_MENU, 2000):
         _menu_power_off = True
 
-def _timer_cb(t):
-    _scan_keys()
-
 def start():
-    global _timer_keys
-    _timer_keys = Timer(2, period=10000, mode=Timer.PERIODIC, callback=_timer_cb)
-    _timer_keys.start()
+    """Called by main.py before running the app. There is no background timer any
+    more — keys are scanned in tick() — so the only thing to do here is keep the
+    hang watchdog disarmed across boot/import/setup (which can be slow) so it can't
+    false-trip. The watchdog arms on the first tick() of the app's steady loop.
+    main.py ticks a few times right after this to read keys held at boot."""
+    _watchdog_disarm()
 
 def stop():
-    """Stop the key-scan timer. Used before cutting power so the ISR can't run
-    while we reconfigure pins / enter System OFF."""
-    global _timer_keys
-    if _timer_keys is not None:
-        _timer_keys.deinit()
-        _timer_keys = None
+    """Disarm the hang watchdog. main.py calls this before the power-off / System
+    OFF sequence, which stops calling tick() while it cuts power — without this the
+    watchdog could reboot the board mid-shutdown."""
+    _watchdog_disarm()
 
 # ── Scheduled callbacks ───────────────────────────────────────────────────────
 _scheduled    = []
@@ -314,8 +323,16 @@ def delay(ms, fn):
     _scheduled.append([_time.ticks_add(_time.ticks_ms(), ms), fn])
 
 def tick():
-    """Recomposite LEDs, fire scheduled callbacks, yield 10ms. Always True."""
+    """Scan keys, recomposite LEDs, fire scheduled callbacks, yield 10ms. True.
+
+    This is the single cooperative yield point: every blocking loop must call it
+    (directly or via wait()/waitPress()/...). Scanning lives here — there is no
+    background timer — so a loop that never calls tick() stops scanning keys.
+    The firmware watchdog (board.c VM hook) catches that case: if tick() isn't
+    called for ~1s the script is deemed hung and the device reboots into MENU."""
     global _last_tick_ms
+    _watchdog_feed()
+    _scan_keys()
     now = _time.ticks_ms()
     i = 0
     while i < len(_scheduled):

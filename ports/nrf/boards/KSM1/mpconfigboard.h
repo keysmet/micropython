@@ -88,8 +88,12 @@ extern void KSM1_board_enter_bootloader(void);
 #define MICROPY_OBJ_REPR (MICROPY_OBJ_REPR_C)
 
 // VM hook: runs every MICROPY_VM_HOOK_COUNT bytecodes.
-// Polls USB CDC so Ctrl+C interrupts tight Python loops, and detects 2s MENU hold.
+// Polls USB CDC so Ctrl+C interrupts tight Python loops, and runs the hang
+// watchdog: if ksm.tick() hasn't been called for KSM1_WATCHDOG_MS, the script is
+// deemed hung (non-yielding loop) and the board reboots into MENU mode.
 extern void KSM1_vm_hook(void);
+extern void KSM1_watchdog_feed(void);     // ksm.tick() calls this via the `hid` module
+extern void KSM1_watchdog_disarm(void);   // main.py calls this before shutdown
 #define MICROPY_VM_HOOK_COUNT   (200)
 #define MICROPY_VM_HOOK_INIT    static uint vm_hook_div = MICROPY_VM_HOOK_COUNT;
 #define MICROPY_VM_HOOK_POLL    if (--vm_hook_div == 0) { vm_hook_div = MICROPY_VM_HOOK_COUNT; KSM1_vm_hook(); }

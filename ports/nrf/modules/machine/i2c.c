@@ -175,6 +175,23 @@ static const mp_machine_i2c_p_t machine_hard_i2c_p = {
     .transfer_single = machine_hard_i2c_transfer_single,
 };
 
+// Blocking raw TX on a TWI instance, for use from contexts that can't run the
+// Python I2C object (e.g. the KSM1 hang watchdog in board.c, which must write the
+// boot-intent EEPROM byte from the VM hook before resetting). Reuses whatever
+// config main.py's I2C(id, ...) already installed on this instance; must only be
+// called after that object exists. Returns 0 on success, negative on error.
+int machine_hard_i2c_raw_tx(int id, uint16_t addr, const uint8_t *buf, size_t len) {
+    if (id < 0 || id >= MP_ARRAY_SIZE(machine_hard_i2c_obj)) {
+        return -MP_EINVAL;
+    }
+    const machine_hard_i2c_obj_t *self = &machine_hard_i2c_obj[id];
+    nrfx_twi_enable(&self->p_twi);
+    nrfx_twi_xfer_desc_t desc = NRFX_TWI_XFER_DESC_TX(addr, (uint8_t *)buf, len);
+    nrfx_err_t err = nrfx_twi_xfer(&self->p_twi, &desc, 0);
+    nrfx_twi_disable(&self->p_twi);
+    return err == NRFX_SUCCESS ? 0 : -MP_EIO;
+}
+
 MP_DEFINE_CONST_OBJ_TYPE(
     machine_i2c_type,
     MP_QSTR_I2C,

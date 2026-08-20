@@ -1,13 +1,14 @@
 # Registers a Python object as sys.modules['machine'] before ksm.py is imported.
-# This intercepts 'from machine import Pin, Timer' and 'import machine' in ksm.py,
-# replacing the nRF hardware with browser-backed equivalents.
+# This intercepts 'from machine import Pin' and 'import machine' in ksm.py,
+# replacing the nRF hardware with a browser-backed Pin (keys read from the host).
 #
-# Must be imported once before 'import ksm'. On each re-run, pop both
-# '_ksm_patches' and 'machine' from sys.modules to reset Timer._active.
+# Keys are scanned inside ksm.tick() (no background timer), so this stub only
+# needs to provide Pin + machine.reset — the same shared ksm.py runs here and on
+# the device. Under the restart model main.ts recreates the whole instance per
+# Run, so there is no module state to reset between scripts.
 
 import sys
 import _ksm_native as _nat
-import time as _t
 
 from pins import (PIN_MENU, PIN_K1, PIN_K2, PIN_K3, PIN_K4, PIN_K5,
                   PIN_K6, PIN_K7, PIN_K8, PIN_K9, PIN_K10)
@@ -34,30 +35,6 @@ class _Machine:
             # "is down" boolean to match the hardware the firmware expects.
             return 0 if _nat.get_key_down(self._key) else 1
 
-    class Timer:
-        ONE_SHOT = 0; PERIODIC = 1
-        _active = []
-
-        def __init__(self, id=-1, *, period=0, mode=0, callback=None):
-            self._period_ms = period // 1000  # µs → ms
-            self._cb = callback
-            self._last = _t.ticks_ms()
-
-        def start(self):
-            _Machine.Timer._active.append(self)
-
-        def deinit(self):
-            if self in _Machine.Timer._active:
-                _Machine.Timer._active.remove(self)
-
-        @classmethod
-        def _tick(cls):
-            now = _t.ticks_ms()
-            for t in list(cls._active):
-                if _t.ticks_diff(now, t._last) >= t._period_ms:
-                    t._last = now
-                    if t._cb: t._cb(t)
-
     @staticmethod
     def reset(): pass
 
@@ -66,7 +43,3 @@ class _Machine:
 
 
 sys.modules['machine'] = _Machine
-
-
-def tick():
-    _Machine.Timer._tick()
