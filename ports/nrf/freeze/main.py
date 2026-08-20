@@ -106,9 +106,6 @@ if _intent == INTENT_SLEEPING:
         ksm.clearAll()
         time.sleep_ms(50)
 
-# ── Start the cooperative key scanner ────────────────────────────────────────
-ksm.start()
-
 # ── Decide: user script or MENU mode ─────────────────────────────────────────
 # By default boot straight into the user script if there is one. Force MENU mode
 # instead when either: a K1..K10 is held at boot (recovery / upload), or the last
@@ -157,20 +154,29 @@ if _run_user:
             print("setup() error:", e)
 
     print("Running." if _loop else "Waiting for app.")
-    while True:
-        if _loop:
-            try:
-                _loop()
-            except Exception as e:
-                print("loop() error:", e)
-                _loop = None            # stop calling after a crash
-        ksm.tick()                      # scheduled callbacks + onUpdate + 10ms yield
-        if ksm.menu_power_off():        # MENU held 2s → power off
-            _power_off()
-        if ksm.menu_triple_press():     # triple-press MENU → back to MENU mode
-            print("Exiting to MENU.")
-            _intent_write(INTENT_MENU)  # so the reset lands in MENU, not auto-run
-            machine.reset()
+    # Arm the hang watchdog around the user loop only. If the loop stops yielding
+    # (non-tick()ing `while True`), the board reboots to MENU. Ctrl+C at the REPL
+    # (e.g. a USB upload stopping the script) raises KeyboardInterrupt out of this
+    # loop and drops to the REPL where nothing ticks — the finally disarms so the
+    # watchdog can't reboot us mid-upload.
+    ksm.start()
+    try:
+        while True:
+            if _loop:
+                try:
+                    _loop()
+                except Exception as e:
+                    print("loop() error:", e)
+                    _loop = None            # stop calling after a crash
+            ksm.tick()                      # scheduled callbacks + onUpdate + 10ms yield
+            if ksm.menu_power_off():        # MENU held 2s → power off
+                _power_off()
+            if ksm.menu_triple_press():     # triple-press MENU → back to MENU mode
+                print("Exiting to MENU.")
+                _intent_write(INTENT_MENU)  # so the reset lands in MENU, not auto-run
+                machine.reset()
+    finally:
+        ksm.stop()                          # disarm watchdog when leaving the app loop
 
 # ── MENU mode: idle until a key launches the user script ──────────────────────
 # Reached when there's no app, or a key was held at boot to force MENU. Pressing
@@ -179,6 +185,10 @@ if _run_user:
 # key-held check would just bounce back to MENU.
 print("MENU mode. Press any key to run your script." if _has_app
       else "MENU mode. No app.py — upload one to /eeprom/app.py.")
+
+# MENU mode never arms the hang watchdog (only trusted main.py code runs here, and
+# it always ticks), so there is nothing to disarm on the way out — a Ctrl+C to the
+# REPL for a USB upload leaves the watchdog disarmed already.
 
 # If a key was held at boot to reach MENU, wait for it to be released and clear
 # any pending press edges, so letting go doesn't immediately launch the script.

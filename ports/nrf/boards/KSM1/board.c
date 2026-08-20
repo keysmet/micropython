@@ -12,7 +12,7 @@
  * hang watchdog. There is no background key-scan timer: keys are scanned inside
  * ksm.tick() (the single cooperative yield point). A well-behaved script calls
  * tick() regularly; each call feeds the watchdog (KSM1_watchdog_feed, wired from
- * the `hid` module — see modksm.c / freeze/ksm.py). If tick() is not called for
+ * the `board` module — see modksm.c / freeze/ksm.py). If tick() is not called for
  * KSM1_WATCHDOG_MS, the script is stuck in a non-yielding loop: we write the MENU
  * boot intent to the EEPROM and reset, so the board recovers into MENU mode
  * instead of hanging until the battery dies.
@@ -44,21 +44,32 @@
 // Blocking raw I2C TX on a configured TWI instance (defined in modules/machine/i2c.c).
 extern int machine_hard_i2c_raw_tx(int id, uint16_t addr, const uint8_t *buf, size_t len);
 
-// Last time ksm.tick() fed the watchdog. 0 = never fed yet (watchdog disabled
-// until the first tick, so it can't fire during boot/import before the app runs).
+// Last tick() timestamp, or 0 when the watchdog is disarmed. The watchdog only
+// guards USER mode (where an untrusted script can hang): main.py arms it right
+// before the user loop and disarms it on the way out. MENU mode / boot / the REPL
+// leave it disarmed, so they can sit without ticking and never reboot.
 static uint32_t ksm1_last_feed_ms = 0;
 
-void KSM1_watchdog_feed(void) {
+static uint32_t ksm1_now_nonzero(void) {
     uint32_t now = mp_hal_ticks_ms();
-    if (now == 0) {
-        now = 1;   // 0 is the "never fed" sentinel; keep the watchdog armed
-    }
-    ksm1_last_feed_ms = now;
+    return now ? now : 1;   // 0 is the "disarmed" sentinel
 }
 
-// Disarm the watchdog (back to the "never fed" state). main.py calls this before
-// the power-off / System OFF sequence, which intentionally stops calling tick()
-// while it cuts power — the watchdog must not reboot us mid-shutdown.
+// Arm the watchdog (main.py, entering USER mode).
+void KSM1_watchdog_arm(void) {
+    ksm1_last_feed_ms = ksm1_now_nonzero();
+}
+
+// Refresh the deadline — but only while armed. ksm.tick() calls this every yield;
+// in MENU mode (disarmed) it is a no-op, so MENU ticks never arm the watchdog.
+void KSM1_watchdog_feed(void) {
+    if (ksm1_last_feed_ms != 0) {
+        ksm1_last_feed_ms = ksm1_now_nonzero();
+    }
+}
+
+// Disarm (main.py, leaving the user loop — normal exit, or Ctrl+C to the REPL for
+// a USB upload — and before the power-off / System OFF sequence stops ticking).
 void KSM1_watchdog_disarm(void) {
     ksm1_last_feed_ms = 0;
 }
@@ -82,9 +93,9 @@ void KSM1_vm_hook(void) {
     // is what actually raises the exception inside the Python VM.
     mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
 
-    // Hang watchdog: if ksm.tick() hasn't fed us for KSM1_WATCHDOG_MS, the script
-    // is stuck in a non-yielding loop → reboot into MENU. Disabled until the first
-    // feed (ksm1_last_feed_ms == 0) so boot/import can't trip it.
+    // Hang watchdog: while armed (USER mode), if ksm.tick() hasn't refreshed the
+    // deadline for KSM1_WATCHDOG_MS the script is stuck in a non-yielding loop →
+    // reboot into MENU. Disarmed (== 0) in MENU/boot/REPL, so those never trip it.
     if (ksm1_last_feed_ms != 0 &&
         (uint32_t)(mp_hal_ticks_ms() - ksm1_last_feed_ms) > KSM1_WATCHDOG_MS) {
         ksm1_watchdog_reboot_to_menu();

@@ -14,7 +14,7 @@
 #   kb.media(kb.PLAY_PAUSE)     # media/consumer key
 
 try:
-    from hid import hid_keys as _keys, hid_consumer as _consumer
+    from board import hid_keys as _keys, hid_consumer as _consumer
 except ImportError:                       # simulator: fall back to the sim native
     try:
         from _ksm_native import hid_keys as _keys, hid_consumer as _consumer

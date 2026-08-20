@@ -8,7 +8,7 @@
 #   gamepad.release_all()    # release all buttons
 
 try:
-    from hid import hid_gamepad as _send
+    from board import hid_gamepad as _send
 except ImportError:
     def _send(buttons): pass
 

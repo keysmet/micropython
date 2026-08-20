@@ -9,13 +9,16 @@ import sys as _sys
 from pins import *
 
 # ── Hang watchdog (firmware) ───────────────────────────────────────────────────
-# tick() feeds the firmware watchdog (board.c) so a non-yielding loop reboots to
-# MENU; start()/stop() disarm it around boot and shutdown. On the sim there is no
-# `hid` module; its watchdog (mp_js_hook) is fed by sleep_ms instead, so feed and
-# disarm are no-ops there.
+# The firmware watchdog (board.c) only guards USER mode: start() arms it, tick()
+# refreshes it each yield, and stop() disarms it (leaving the loop / before
+# shutdown). While disarmed (MENU/boot/REPL) tick()'s feed is a no-op, so those
+# never trip it. On the sim there is no `board` module; its watchdog (mp_js_hook) is
+# fed by sleep_ms instead, so arm/feed/disarm are no-ops there.
 try:
-    from hid import feed as _watchdog_feed, disarm as _watchdog_disarm
+    from board import arm as _watchdog_arm, feed as _watchdog_feed, disarm as _watchdog_disarm
 except ImportError:
+    def _watchdog_arm():
+        pass
     def _watchdog_feed():
         pass
     def _watchdog_disarm():
@@ -302,17 +305,15 @@ def _scan_keys():
         _menu_power_off = True
 
 def start():
-    """Called by main.py before running the app. There is no background timer any
-    more — keys are scanned in tick() — so the only thing to do here is keep the
-    hang watchdog disarmed across boot/import/setup (which can be slow) so it can't
-    false-trip. The watchdog arms on the first tick() of the app's steady loop.
-    main.py ticks a few times right after this to read keys held at boot."""
-    _watchdog_disarm()
+    """Arm the hang watchdog. main.py calls this right before the USER-mode loop —
+    the only place an untrusted script runs — so a non-yielding loop there reboots
+    to MENU. There is no background timer any more; keys are scanned in tick()."""
+    _watchdog_arm()
 
 def stop():
-    """Disarm the hang watchdog. main.py calls this before the power-off / System
-    OFF sequence, which stops calling tick() while it cuts power — without this the
-    watchdog could reboot the board mid-shutdown."""
+    """Disarm the hang watchdog. main.py calls this when leaving the user loop (a
+    normal exit, or Ctrl+C to the REPL for a USB upload) and before the power-off /
+    System OFF sequence, which stops calling tick() while it cuts power."""
     _watchdog_disarm()
 
 # ── Scheduled callbacks ───────────────────────────────────────────────────────
@@ -431,7 +432,7 @@ def menu_power_off():
 # Keycodes: USB HID usage page 0x07 (e.g. 4=A, 40=Enter, 79=Right, 80=Left).
 # Pass [] to release all keys.
 try:
-    from hid import hid_keys
+    from board import hid_keys
 except ImportError:
     def hid_keys(keycodes, modifier=0):
         pass

@@ -92,8 +92,9 @@ extern void KSM1_board_enter_bootloader(void);
 // watchdog: if ksm.tick() hasn't been called for KSM1_WATCHDOG_MS, the script is
 // deemed hung (non-yielding loop) and the board reboots into MENU mode.
 extern void KSM1_vm_hook(void);
-extern void KSM1_watchdog_feed(void);     // ksm.tick() calls this via the `hid` module
-extern void KSM1_watchdog_disarm(void);   // main.py calls this before shutdown
+extern void KSM1_watchdog_arm(void);      // main.py arms on entering USER mode
+extern void KSM1_watchdog_feed(void);     // ksm.tick() refreshes (no-op if disarmed)
+extern void KSM1_watchdog_disarm(void);   // main.py disarms leaving the loop / shutdown
 #define MICROPY_VM_HOOK_COUNT   (200)
 #define MICROPY_VM_HOOK_INIT    static uint vm_hook_div = MICROPY_VM_HOOK_COUNT;
 #define MICROPY_VM_HOOK_POLL    if (--vm_hook_div == 0) { vm_hook_div = MICROPY_VM_HOOK_COUNT; KSM1_vm_hook(); }

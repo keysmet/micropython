@@ -1,25 +1,34 @@
-// modksm.c — native helpers for KSM1, exposed via the `hid` built-in module
+// modksm.c — native helpers for the KSM1 board, exposed via the `board` module.
+// (Named `board`, not `hid`: it holds USB-HID *and* the hang watchdog — the HID
+// bit is just some of what the board offers.)
 //
 // USB HID (report ID in parens), consumed by freeze/keyboard.py + gamepad.py:
-//   hid.hid_keys([keycodes], modifier=0)  — keyboard report (1)
-//   hid.hid_gamepad(bitmask)              — gamepad report  (2)
-//   hid.hid_consumer(usage)               — consumer/media  (3)
+//   board.hid_keys([keycodes], modifier=0)  — keyboard report (1)
+//   board.hid_gamepad(bitmask)              — gamepad report  (2)
+//   board.hid_consumer(usage)               — consumer/media  (3)
 // Keycodes: USB HID usage page 0x07 (4=A, 40=Enter, 44=Space, 80=Left arrow)
 //
 // Hang watchdog (see boards/KSM1/board.c), used by freeze/ksm.py:
-//   hid.feed()    — ksm.tick() calls this each yield; missing it for ~1s reboots to MENU
-//   hid.disarm()  — main.py calls this before the shutdown sequence stops ticking
+//   board.arm()     — main.py arms it on entering USER mode
+//   board.feed()    — ksm.tick() refreshes it each yield (no-op while disarmed)
+//   board.disarm()  — main.py disarms leaving the loop (Ctrl+C/upload) or before shutdown
 
 #include "py/runtime.h"
 #include "py/obj.h"
-#include "mpconfigboard.h"   // KSM1_watchdog_feed / KSM1_watchdog_disarm
+#include "mpconfigboard.h"   // KSM1_watchdog_arm / feed / disarm
 #if MICROPY_HW_USB_HID
 #ifndef NO_QSTR
 #include "tusb.h"
 #endif
 #endif
 
-// ── hid.feed() / hid.disarm() — hang watchdog control ────────────────────────
+// ── hid.arm() / hid.feed() / hid.disarm() — hang watchdog control ────────────
+static mp_obj_t hid_arm(void) {
+    KSM1_watchdog_arm();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(hid_arm_obj, hid_arm);
+
 static mp_obj_t hid_feed(void) {
     KSM1_watchdog_feed();
     return mp_const_none;
@@ -89,7 +98,8 @@ static MP_DEFINE_CONST_FUN_OBJ_1(hid_hid_consumer_obj, hid_hid_consumer);
 // ── Export table ─────────────────────────────────────────────────────────────
 
 static const mp_rom_map_elem_t hid_module_globals_table[] = {
-    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_hid) },
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_board) },
+    { MP_ROM_QSTR(MP_QSTR_arm),          MP_ROM_PTR(&hid_arm_obj) },
     { MP_ROM_QSTR(MP_QSTR_feed),         MP_ROM_PTR(&hid_feed_obj) },
     { MP_ROM_QSTR(MP_QSTR_disarm),       MP_ROM_PTR(&hid_disarm_obj) },
     #if MICROPY_HW_USB_HID
@@ -105,4 +115,4 @@ const mp_obj_module_t hid_module = {
     .globals = (mp_obj_dict_t *)&hid_module_globals,
 };
 
-MP_REGISTER_MODULE(MP_QSTR_hid, hid_module);
+MP_REGISTER_MODULE(MP_QSTR_board, hid_module);
