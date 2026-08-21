@@ -243,10 +243,18 @@ _menu_press_last  = 0
 _menu_triple      = False
 _TRIPLE_WINDOW_MS = 500
 
-# 2s MENU-hold power-off: the scanner just latches this flag; main.py polls it
-# (menu_power_off()) and owns the whole shutdown sequence. Keeps all the boot/
-# power logic in one place instead of the scanner reaching back into main.
+# 2s MENU-hold power-off: the scanner latches this flag; tick() acts on it via the
+# _on_power_off handler main.py registers (armWatchdog). Owning the shutdown in a
+# tick()-driven handler — not a poll in main.py's fallback loop — is what makes the
+# escape hatches work for a top-level `while True: ...; tick()` script, which never
+# returns to main.py.
 _menu_power_off = False
+
+# Escape-hatch handlers, set by main.py when it enters USER mode (armWatchdog).
+# tick() calls _on_power_off on a 2s MENU hold and _on_exit_menu on a triple-press,
+# from ANY loop shape. None in MENU/boot (main.py handles those in its own loop).
+_on_power_off = None
+_on_exit_menu = None
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
 # main.py wires these from the app namespace after loading app.py.
@@ -304,16 +312,27 @@ def _scan_keys():
     if hold(KEY_MENU, 2000):
         _menu_power_off = True
 
-def start():
-    """Arm the hang watchdog. main.py calls this right before the USER-mode loop —
-    the only place an untrusted script runs — so a non-yielding loop there reboots
-    to MENU. There is no background timer any more; keys are scanned in tick()."""
+def armWatchdog(on_power_off=None, on_exit_menu=None):
+    """Enter USER mode: arm the hang watchdog and register the MENU escape hatches.
+    main.py calls this right before running the user program — the only place an
+    untrusted script runs. A non-yielding loop stops feeding the watchdog (board.c
+    VM hook) and the board reboots to MENU. While armed, tick() also calls
+    on_power_off (2s MENU hold) and on_exit_menu (triple-press) so those work from
+    ANY loop, including a top-level `while True: ...; tick()` that never returns to
+    main.py. There is no background timer; keys are scanned in tick()."""
+    global _on_power_off, _on_exit_menu
+    _on_power_off = on_power_off
+    _on_exit_menu = on_exit_menu
     _watchdog_arm()
 
-def stop():
-    """Disarm the hang watchdog. main.py calls this when leaving the user loop (a
-    normal exit, or Ctrl+C to the REPL for a USB upload) and before the power-off /
-    System OFF sequence, which stops calling tick() while it cuts power."""
+def disarmWatchdog():
+    """Leave USER mode: disarm the watchdog and drop the escape-hatch handlers.
+    main.py calls this when leaving the user program (a normal exit, or Ctrl+C to
+    the REPL for a USB upload) and before the power-off / System OFF sequence, which
+    stops calling tick() while it cuts power."""
+    global _on_power_off, _on_exit_menu
+    _on_power_off = None
+    _on_exit_menu = None
     _watchdog_disarm()
 
 # ── Scheduled callbacks ───────────────────────────────────────────────────────
@@ -322,6 +341,14 @@ _last_tick_ms = _time.ticks_ms()
 
 def delay(ms, fn):
     _scheduled.append([_time.ticks_add(_time.ticks_ms(), ms), fn])
+
+def _fire_menu_handler(fn):
+    # Drop both escape-hatch handlers before invoking, so a handler that re-enters
+    # tick() (e.g. _power_off's MENU-release wait) can't re-trigger this one. Both
+    # handlers end the program (shutdown / reset), so clearing both is correct.
+    global _on_power_off, _on_exit_menu
+    _on_power_off = _on_exit_menu = None
+    fn()
 
 def tick():
     """Scan keys, recomposite LEDs, fire scheduled callbacks, yield 10ms. True.
@@ -334,6 +361,16 @@ def tick():
     global _last_tick_ms
     _watchdog_feed()
     _scan_keys()
+    # MENU escape hatches (USER mode only — handlers are None otherwise). Acting on
+    # them here, not in main.py, is what lets a top-level while-loop script be
+    # powered off / exited to MENU even though it never returns to main.py. Both
+    # handlers never return (shutdown / reset); we still null the handler before
+    # calling so a re-entrant tick() (e.g. _power_off's MENU-release wait loop)
+    # can't fire it twice.
+    if _on_power_off and menu_power_off():
+        _fire_menu_handler(_on_power_off)     # 2s MENU hold → shutdown (never returns)
+    if _on_exit_menu and menu_triple_press():
+        _fire_menu_handler(_on_exit_menu)     # triple-press → reboot to MENU
     now = _time.ticks_ms()
     i = 0
     while i < len(_scheduled):

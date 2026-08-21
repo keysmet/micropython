@@ -66,7 +66,8 @@ def _system_off():
 # Red flash across all keys as "powering off" feedback (like the Arduino), wait
 # for MENU release, then go straight to System OFF — no reboot. Sleeping directly
 # avoids the boot window where the DAC/amp are powered but undriven (the audible
-# glitch). The scan timer is stopped first so its ISR can't run while we cut power.
+# glitch). Runs from inside tick() (registered as armWatchdog's on_power_off), which
+# nulls the handler before calling, so our own tick() calls below don't re-enter it.
 def _power_off():
     for i in range(ksm.NB_LEDS):
         ksm.setColor(i, ksm.RED)
@@ -77,8 +78,8 @@ def _power_off():
     # NOT create a second Pin on MENU. Keys are scanned in tick(), so poll via it.
     while ksm.down(ksm.KEY_MENU):
         ksm.tick()
-    ksm.stop()          # disarm the hang watchdog before we stop ticking to cut power
-    _system_off()       # never returns
+    ksm.disarmWatchdog()  # disarm before we stop ticking to cut power
+    _system_off()         # never returns
 
 # ── Wake confirmation ────────────────────────────────────────────────────────
 # Only a wake from System OFF reaches here (intent == SLEEPING). The MENU press
@@ -132,35 +133,49 @@ _run_user = _has_app and not _key_held and _intent != INTENT_MENU
 _CALLBACKS = ('onPress', 'onRelease', 'onTap', 'onUpdate',
               'onMenuPress', 'onMenuRelease', 'onMenuTap')
 
+# Triple-press MENU → reboot into MENU mode (not auto-run). Registered with
+# armWatchdog so tick() can invoke it from any loop shape. Never returns.
+def _exit_to_menu():
+    print("Exiting to MENU.")
+    _intent_write(INTENT_MENU)      # so the reset lands in MENU, not auto-run
+    machine.reset()
+
 if _run_user:
     _setup = None
     _loop = None
+    # Arm the hang watchdog around the whole user program — including the exec()
+    # itself, because the KSM1 idiom is a top-level `while True: ...; tick()` loop
+    # that never returns from exec(). A non-yielding loop (top-level OR inside
+    # loop()/setup()) stops feeding the watchdog and the board reboots to MENU.
+    # The escape hatches (2s MENU hold → _power_off, triple-press → _exit_to_menu)
+    # are driven from tick() too, so they work for a top-level loop that never
+    # returns here. Ctrl+C at the REPL (e.g. a USB upload stopping the script)
+    # raises KeyboardInterrupt out of here and drops to the REPL where nothing
+    # ticks — the finally disarms so the watchdog can't reboot us mid-upload.
+    ksm.armWatchdog(_power_off, _exit_to_menu)
     try:
-        _ns = {}
-        with open('/eeprom/app.py') as _f:
-            exec(_f.read(), _ns)
-        _setup = _ns.get('setup')
-        _loop = _ns.get('loop')
-        for _cb in _CALLBACKS:
-            if _cb in _ns:
-                setattr(ksm, _cb, _ns[_cb])
-    except Exception as e:
-        print("app load error:", e)
-
-    if _setup:
         try:
-            _setup()
+            _ns = {}
+            with open('/eeprom/app.py') as _f:
+                exec(_f.read(), _ns)        # top-level while-loop scripts block here
+            _setup = _ns.get('setup')
+            _loop = _ns.get('loop')
+            for _cb in _CALLBACKS:
+                if _cb in _ns:
+                    setattr(ksm, _cb, _ns[_cb])
         except Exception as e:
-            print("setup() error:", e)
+            print("app load error:", e)
 
-    print("Running." if _loop else "Waiting for app.")
-    # Arm the hang watchdog around the user loop only. If the loop stops yielding
-    # (non-tick()ing `while True`), the board reboots to MENU. Ctrl+C at the REPL
-    # (e.g. a USB upload stopping the script) raises KeyboardInterrupt out of this
-    # loop and drops to the REPL where nothing ticks — the finally disarms so the
-    # watchdog can't reboot us mid-upload.
-    ksm.start()
-    try:
+        if _setup:
+            try:
+                _setup()
+            except Exception as e:
+                print("setup() error:", e)
+
+        # Only reached by scripts that returned from exec() (loop()/callback style,
+        # or a bare script with no top-level loop). Drive loop()/callbacks here;
+        # tick() handles the MENU escape hatches.
+        print("Running." if _loop else "Waiting for app.")
         while True:
             if _loop:
                 try:
@@ -168,15 +183,9 @@ if _run_user:
                 except Exception as e:
                     print("loop() error:", e)
                     _loop = None            # stop calling after a crash
-            ksm.tick()                      # scheduled callbacks + onUpdate + 10ms yield
-            if ksm.menu_power_off():        # MENU held 2s → power off
-                _power_off()
-            if ksm.menu_triple_press():     # triple-press MENU → back to MENU mode
-                print("Exiting to MENU.")
-                _intent_write(INTENT_MENU)  # so the reset lands in MENU, not auto-run
-                machine.reset()
+            ksm.tick()                      # scan + escape hatches + callbacks + 10ms yield
     finally:
-        ksm.stop()                          # disarm watchdog when leaving the app loop
+        ksm.disarmWatchdog()                # disarm + drop handlers when leaving the app
 
 # ── MENU mode: idle until a key launches the user script ──────────────────────
 # Reached when there's no app, or a key was held at boot to force MENU. Pressing
