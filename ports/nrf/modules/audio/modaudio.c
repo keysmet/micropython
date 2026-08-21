@@ -41,6 +41,7 @@
 #if MICROPY_PY_AUDIO
 
 #include <string.h>
+#include <stdint.h>
 #include "py/obj.h"
 #include "py/mphal.h"
 #include "sfxr.h"
@@ -58,8 +59,13 @@
 #define AUDIO_PIN_LRCK      (1)
 #define AUDIO_PIN_DIN       (26)
 
-// Number of simultaneous sfxr voices mixed together.
-#define AUDIO_MAX_VOICES    (4)
+// Number of simultaneous sfxr voices mixed together. Each voice costs roughly
+// a quarter of the 64 MHz core to synthesize, and the mixing runs in the I2S
+// DMA IRQ, so the pool size is a hard CPU budget rather than a taste knob:
+// beyond two the handler starts overrunning its ~5.6 ms deadline and starves
+// the MicroPython VM, which shows up as laggy key scanning. A third sound
+// steals the oldest voice (see audio_play), so rapid presses stay responsive.
+#define AUDIO_MAX_VOICES    (2)
 
 // Number of 32-bit words in each DMA half-buffer.
 // In 16-bit LEFT-aligned stereo the peripheral consumes one packed
@@ -218,8 +224,10 @@ static mp_obj_t audio_play(mp_obj_t params_in) {
             target = voice;
             break;
         }
-        // Track the oldest voice as a steal candidate (smallest seq).
-        if (target == NULL || voice->seq < target->seq) {
+        // Track the oldest voice as a steal candidate. Compare as a signed
+        // difference rather than `<` so the choice stays correct when audio_seq
+        // wraps past UINT32_MAX (same trick as ticks_diff).
+        if (target == NULL || (int32_t)(voice->seq - target->seq) < 0) {
             target = voice;
         }
     }

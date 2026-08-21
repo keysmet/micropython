@@ -36,6 +36,19 @@ extern "C" {
  * To emit at SFXR_SAMPLE_RATE we run the engine SFXR_SUMMANDS ticks per
  * output sample and average them (this is what jsfxr does). The ratio is
  * rounded to the nearest integer: 44100/22050 = 2. */
+/* Oscillator/filter resolution: the waveform, LPF, HPF and phaser are stepped
+ * this many times per engine tick. Reference sfxr hard-codes 8, which costs
+ * ~47% of a 64 MHz Cortex-M4 per voice — too much for the KSM1's 4-voice pool.
+ * Halving it halves synthesis cost; period and filter constants are rescaled
+ * from it so pitch and cutoff frequencies stay put. Measured against the
+ * reference render, 4 deviates < 0.05 dB below 6 kHz on all stock sounds.
+ * Do not go below 4: at 2 a resonant sweep (p_lpf_resonance) loses ~21 dB. */
+#ifndef SFXR_SUPERSAMPLE
+#define SFXR_SUPERSAMPLE 4
+#endif
+/* Steps removed relative to the reference 8x, used to rescale per-step rates. */
+#define SFXR_SS_RATIO    (8.0f / (float)SFXR_SUPERSAMPLE)
+
 #define SFXR_ENGINE_RATE 44100
 #define SFXR_SUMMANDS    ((SFXR_ENGINE_RATE + SFXR_SAMPLE_RATE / 2) / SFXR_SAMPLE_RATE)
 
@@ -90,6 +103,7 @@ typedef struct {
     float fperiod, fmaxperiod, fslide, fdslide;
     int   period;
     int   phase;
+    float inv_period;              /* 1/period, refreshed once per engine tick */
 
     /* arpeggio */
     float arp_mod;
@@ -97,6 +111,7 @@ typedef struct {
 
     /* duty */
     float square_duty, square_slide;
+    float inv_duty, inv_1mduty;    /* 1/duty and 1/(1-duty), per engine tick */
 
     /* envelope */
     int   env_stage, env_time;

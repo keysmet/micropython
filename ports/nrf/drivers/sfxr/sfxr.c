@@ -38,6 +38,14 @@ static float sfxr_sinf(float x) {
            (sfxr_sin_lut[(i + 1) & 1023] - sfxr_sin_lut[i & 1023]) * f;
 }
 
+/* x^n for small integer n. Used once at reset to compound per-step ramps
+ * when SFXR_SUPERSAMPLE reduces the number of steps. */
+static float sfxr_powf_i(float x, int n) {
+    float r = 1.0f;
+    while (n-- > 0) r *= x;
+    return r;
+}
+
 /* x*x and x*x*x, replacing pow(x,2)/pow(x,3). */
 static inline float sfxr_sq(float x)  { return x * x; }
 static inline float sfxr_cube(float x) { return x * x * x; }
@@ -58,9 +66,13 @@ static void sfxr_reset_impl(sfxr_state *s, int restart) {
     if (!restart)
         s->phase = 0;
 
-    s->fperiod    = 100.0f / (p->p_base_freq * p->p_base_freq + 0.001f);
+    /* Periods are counted in supersample steps, so they scale with
+     * SFXR_SUPERSAMPLE (the reference engine used 8). Keeps pitch identical. */
+    s->fperiod    = 100.0f / (p->p_base_freq * p->p_base_freq + 0.001f)
+                    / SFXR_SS_RATIO;
     s->period     = (int)s->fperiod;
-    s->fmaxperiod = 100.0f / (p->p_freq_limit * p->p_freq_limit + 0.001f);
+    s->fmaxperiod = 100.0f / (p->p_freq_limit * p->p_freq_limit + 0.001f)
+                    / SFXR_SS_RATIO;
     s->fslide     = 1.0f - sfxr_cube(p->p_freq_ramp) * 0.01f;
     s->fdslide    = -sfxr_cube(p->p_freq_dramp) * 0.000001f;
 
@@ -80,14 +92,18 @@ static void sfxr_reset_impl(sfxr_state *s, int restart) {
         /* low-pass filter */
         s->fltp  = 0.0f;
         s->fltdp = 0.0f;
-        s->fltw  = sfxr_cube(p->p_lpf_freq) * 0.1f;
-        s->fltw_d = 1.0f + p->p_lpf_ramp * 0.0001f;
+        /* The LPF/HPF step once per supersample. With fewer steps per second
+         * each step must advance further to keep the same corner frequency;
+         * the ramps compound over the steps that remain. */
+        s->fltw  = sfxr_cube(p->p_lpf_freq) * 0.1f * SFXR_SS_RATIO;
+        if (s->fltw > 0.1f) s->fltw = 0.1f;
+        s->fltw_d = sfxr_powf_i(1.0f + p->p_lpf_ramp * 0.0001f, 8 / SFXR_SUPERSAMPLE);
         s->fltdmp = 5.0f / (1.0f + sfxr_sq(p->p_lpf_resonance) * 20.0f) *
-                    (0.01f + s->fltw);
+                    (0.01f + s->fltw) * SFXR_SS_RATIO;
         if (s->fltdmp > 0.8f) s->fltdmp = 0.8f;
         s->fltphp = 0.0f;
-        s->flthp  = sfxr_sq(p->p_hpf_freq) * 0.1f;
-        s->flthp_d = 1.0f + p->p_hpf_ramp * 0.0003f;
+        s->flthp  = sfxr_sq(p->p_hpf_freq) * 0.1f * SFXR_SS_RATIO;
+        s->flthp_d = sfxr_powf_i(1.0f + p->p_hpf_ramp * 0.0003f, 8 / SFXR_SUPERSAMPLE);
 
         /* vibrato */
         s->vib_phase = 0.0f;
@@ -103,9 +119,9 @@ static void sfxr_reset_impl(sfxr_state *s, int restart) {
         s->env_length[2] = (int)(p->p_env_decay   * p->p_env_decay   * 100000.0f);
 
         /* phaser */
-        s->fphase = sfxr_sq(p->p_pha_offset) * 1020.0f;
+        s->fphase = sfxr_sq(p->p_pha_offset) * 1020.0f / SFXR_SS_RATIO;
         if (p->p_pha_offset < 0.0f) s->fphase = -s->fphase;
-        s->fdphase = sfxr_sq(p->p_pha_ramp) * 1.0f;
+        s->fdphase = sfxr_sq(p->p_pha_ramp) * 1.0f / SFXR_SS_RATIO;
         if (p->p_pha_ramp < 0.0f) s->fdphase = -s->fdphase;
         s->iphase = (int)(s->fphase < 0 ? -s->fphase : s->fphase);
         s->ipp = 0;
@@ -133,7 +149,7 @@ void sfxr_reset(sfxr_state *s, const sfxr_params *p) {
     sfxr_reset_impl(s, 0);
 }
 
-/* Advance the engine by one 44100-Hz tick and return the 8x-oversampled,
+/* Advance the engine by one 44100-Hz tick and return the supersampled,
  * envelope-applied sample (before master/sound volume). Returns 0.0f and
  * leaves s->playing at 0 once the sound has ended. */
 static float sfxr_engine_tick(sfxr_state *s) {
@@ -169,12 +185,21 @@ static float sfxr_engine_tick(sfxr_state *s) {
         rfperiod = s->fperiod * (1.0f + sfxr_sinf(s->vib_phase) * s->vib_amp);
     }
     s->period = (int)rfperiod;
-    if (s->period < 8) s->period = 8;
+    if (s->period < SFXR_SUPERSAMPLE) s->period = SFXR_SUPERSAMPLE;
+    /* period changes once per engine tick but fp is needed on every supersample
+     * step: one divide here replaces SFXR_SUPERSAMPLE of them in the inner loop
+     * (vdiv.f32 is 14 non-pipelined cycles on Cortex-M4). */
+    s->inv_period = 1.0f / (float)s->period;
 
     /* duty */
     s->square_duty += s->square_slide;
     if (s->square_duty < 0.0f) s->square_duty = 0.0f;
     if (s->square_duty > 0.5f) s->square_duty = 0.5f;
+    /* Sawtooth divides by duty and by 1-duty on every supersample step; both
+     * only change here. Guarded so a zero duty cannot divide by zero. */
+    s->inv_duty   = s->square_duty > 0.0f ? 1.0f / s->square_duty : 0.0f;
+    s->inv_1mduty = (1.0f - s->square_duty) > 0.0f
+                    ? 1.0f / (1.0f - s->square_duty) : 0.0f;
 
     /* volume envelope */
     s->env_time++;
@@ -205,9 +230,9 @@ static float sfxr_engine_tick(sfxr_state *s) {
         if (s->flthp > 0.1f)     s->flthp = 0.1f;
     }
 
-    /* 8x supersampling */
+    /* supersampling (SFXR_SUPERSAMPLE steps) */
     ssample = 0.0f;
-    for (si = 0; si < 8; si++) {
+    for (si = 0; si < SFXR_SUPERSAMPLE; si++) {
         float sample = 0.0f;
         float fp;
         float pp;
@@ -222,16 +247,16 @@ static float sfxr_engine_tick(sfxr_state *s) {
             }
         }
 
-        fp = (float)s->phase / (float)s->period;
+        fp = (float)s->phase * s->inv_period;
         switch (p->wave_type) {
         case 0: /* square */
             sample = (fp < s->square_duty) ? 0.5f : -0.5f;
             break;
         case 1: /* sawtooth (jsfxr duty-aware: a triangle at duty=0.5) */
             if (fp < s->square_duty)
-                sample = -1.0f + 2.0f * fp / s->square_duty;
+                sample = -1.0f + 2.0f * fp * s->inv_duty;
             else
-                sample = 1.0f - 2.0f * (fp - s->square_duty) / (1.0f - s->square_duty);
+                sample = 1.0f - 2.0f * (fp - s->square_duty) * s->inv_1mduty;
             break;
         case 2: /* sine */
             sample = sfxr_sinf(fp * 2.0f * SFXR_PI);
@@ -284,7 +309,7 @@ static float sfxr_next_sample(sfxr_state *s) {
         acc += sfxr_engine_tick(s);
     acc /= (float)SFXR_SUMMANDS;
 
-    acc = acc / 8.0f * master_vol;
+    acc = acc / (float)SFXR_SUPERSAMPLE * master_vol;
     acc *= s->gain;
 
     if (acc >  1.0f) acc =  1.0f;
