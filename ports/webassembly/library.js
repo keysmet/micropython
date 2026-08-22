@@ -84,4 +84,15 @@ mergeInto(LibraryManager.library, {
             globalThis._ksmAudioStop();
         }
     },
+
+    // KSM1 synth bridge: unlike sfxr, the `synth` module streams (its tempo
+    // clock and note queues advance during rendering), so instead of
+    // receiving a finished buffer the host page opens an audio stream here
+    // and then pulls blocks by calling the exported ksm_synth_render(n)
+    // from its audio callback.
+    mp_js_synth_start: (sample_rate) => {
+        if (globalThis._ksmSynthStart) {
+            globalThis._ksmSynthStart(sample_rate);
+        }
+    },
 });

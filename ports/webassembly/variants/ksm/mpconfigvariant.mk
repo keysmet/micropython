@@ -10,3 +10,12 @@ SRC_C += \
 	modaudio.c \
 	ports/nrf/drivers/sfxr/sfxr.c \
 	ports/nrf/drivers/sfxr/sfxr_mp.c \
+
+# Native `synth` module — the ksynth chiptune synthesizer (developed in the
+# ksm-synth repo, vendored under ports/nrf/drivers/ksynth). Streaming: JS
+# pulls blocks via the exported ksm_synth_render (see modsynth_port.c).
+INC += -I$(TOP)/ports/nrf/drivers/ksynth
+SRC_C += \
+	modsynth_port.c \
+	ports/nrf/drivers/ksynth/ksynth.c \
+	ports/nrf/drivers/ksynth/modsynth.c \

@@ -34,3 +34,4 @@ extern uint32_t mp_js_random_u32(void);
 extern void mp_js_extend_watchdog(void);
 extern void mp_js_audio_play(const float *samples, int nsamples, int sample_rate);
 extern void mp_js_audio_stop(void);
+extern void mp_js_synth_start(int sample_rate);
