@@ -121,6 +121,12 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
 #endif
 
 void KSM1_board_early_init(void) {
+    // Enable the instruction cache. It is off at reset, so all code runs straight
+    // from flash with wait states — which the sfxr synthesis inner loop pays on
+    // every one of its ~350k iterations per second per voice. The loop is small
+    // enough to sit in the 2KB cache.
+    NRF_NVMC->ICACHECNF = NVMC_ICACHECNF_CACHEEN_Msk;
+
     // MDBT50Q runs in High Voltage mode (VDDH). UICR.REGOUT0 controls GPIO
     // output voltage and defaults to 1.8V (erased flash = 0xFFFFFFFF).
     // SK6812 LEDs on 2.0.5 run at ~5V so VIH ~3.25V — 1.8V GPIO can't drive them.
