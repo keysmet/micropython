@@ -41,14 +41,11 @@
 #include "ksynth.h"
 #include "modsynth.h"
 
-#define SYNTH_SAMPLE_RATE (22050)
-
 static bool synth_ready;
 
 static void ensure_init(void) {
     if (!synth_ready) {
-        ksyn_init(SYNTH_SAMPLE_RATE);
-        ksynth_port_start(SYNTH_SAMPLE_RATE);
+        ksynth_port_start(); /* calls ksyn_init() with the backend's rate */
         synth_ready = true;
     }
 }

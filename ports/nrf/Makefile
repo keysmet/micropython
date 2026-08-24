@@ -83,6 +83,7 @@ INC += -I./modules/nrf
 INC += -I./modules/audio
 INC += -I./drivers
 INC += -I./drivers/sfxr
+INC += -I./drivers/ksynth
 INC += -I./drivers/bluetooth
 INC += -I./drivers/usb
 INC += -I../../lib/nrfx/
@@ -239,6 +240,8 @@ SRC_C += \
 	drivers/flash.c \
 	drivers/sfxr/sfxr.c \
 	drivers/sfxr/sfxr_mp.c \
+	drivers/ksynth/ksynth.c \
+	drivers/ksynth/modsynth.c \
 	drivers/rng.c \
 	drivers/softpwm.c \
 	drivers/ticker.c \
@@ -294,6 +297,7 @@ DRIVERS_SRC_C += $(addprefix modules/,\
 	music/modmusic.c \
 	music/musictunes.c \
 	audio/modaudio.c \
+	synth/modsynth_port.c \
 	ble/modble.c \
 	nrf/modnrf.c \
 	nrf/flashbdev.c \

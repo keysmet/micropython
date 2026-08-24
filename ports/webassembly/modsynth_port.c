@@ -45,8 +45,11 @@
 #include "modsynth.h"
 #include "library.h"
 
-void ksynth_port_start(int sample_rate) {
-    mp_js_synth_start(sample_rate);
+#define SYNTH_SAMPLE_RATE (22050)
+
+void ksynth_port_start(void) {
+    ksyn_init(SYNTH_SAMPLE_RATE);
+    mp_js_synth_start(SYNTH_SAMPLE_RATE);
 }
 
 #define SYNTH_MAX_BLOCK (2048)

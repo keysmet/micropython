@@ -20,7 +20,9 @@
  */
 #include "ksynth.h"
 #include <string.h>
-#include <math.h> /* init only */
+#include <math.h> /* init only; strictly single-precision (the nRF port
+                     builds with -fsingle-precision-constant and treats
+                     double promotion as an error, like sfxr.c) */
 
 /* ------------------------------------------------------------------ */
 /* Globals                                                             */
@@ -150,26 +152,28 @@ void ksyn_init(int rate) {
 
     /* Pitch LUT: phase increment for each MIDI note (A4 = 69 = 440 Hz),
      * capped just below Nyquist so runaway slides stall instead of
-     * wrapping into fold-back garbage. */
+     * wrapping into fold-back garbage. (float precision: ~1e-7 relative,
+     * a few hundredths of a cent — far below audibility) */
+    float fr = (float)rate;
     g_inc_max = 0x7FFF0000u; /* ~Nyquist */
     for (int n = 0; n < 133; n++) {
-        double f = 440.0 * pow(2.0, (n - 69) / 12.0);
-        double inc = f * 4294967296.0 / (double)rate;
-        if (inc > (double)g_inc_max) inc = (double)g_inc_max;
+        float f = 440.0f * powf(2.0f, (float)(n - 69) * (1.0f / 12.0f));
+        float inc = f * (4294967296.0f / fr);
+        if (inc > (float)g_inc_max) inc = (float)g_inc_max;
         g_note_inc[n] = (uint32_t)inc;
     }
 
     /* One-pole low-pass coefficients: cutoff index i (= param/8) maps
      * exponentially 40 Hz .. ~10.2 kHz; k = 1 - exp(-2*pi*fc/sr), Q15. */
     for (int i = 0; i <= 32; i++) {
-        double fc = 40.0 * pow(2.0, i / 4.0);
-        double k = 1.0 - exp(-2.0 * 3.14159265358979 * fc / (double)rate);
-        if (k > 0.9995) k = 0.9995;
-        g_lpf_k[i] = (uint16_t)(k * 32768.0);
+        float fc = 40.0f * powf(2.0f, (float)i * 0.25f);
+        float k = 1.0f - expf(-2.0f * 3.14159265f * fc / fr);
+        if (k > 0.9995f) k = 0.9995f;
+        g_lpf_k[i] = (uint16_t)(k * 32768.0f);
     }
 
-    g_tick_sec_q16 = (uint32_t)(65536.0 * CTRL / (double)rate);
-    g_vib_unit = (uint32_t)(4294967296.0 * CTRL / (double)rate);
+    g_tick_sec_q16 = (uint32_t)(65536.0f * (float)CTRL / fr);
+    g_vib_unit = (uint32_t)(4294967296.0f * (float)CTRL / fr);
 
     g_tempo_on = 0;
     g_ticks_done = g_ticks_taken = 0;
