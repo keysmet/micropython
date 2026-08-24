@@ -25,17 +25,18 @@ static void sfxr_build_lut(void) {
     sfxr_lut_ready = 1;
 }
 
-/* sine of x radians via LUT with linear interpolation. */
-static float sfxr_sinf(float x) {
-    float t = x * (1024.0f / (2.0f * SFXR_PI));
-    int   i;
-    float f;
-    /* wrap into [0,1024) */
-    t = t - 1024.0f * floorf(t * (1.0f / 1024.0f));
-    i = (int)t;
-    f = t - (float)i;
-    return sfxr_sin_lut[i & 1023] +
-           (sfxr_sin_lut[(i + 1) & 1023] - sfxr_sin_lut[i & 1023]) * f;
+/* sine of x radians via LUT with linear interpolation.
+ * The table is a full period, so the two `& 1023` masks already wrap the index:
+ * scaling to table units and truncating is all that is needed, and floorf() (a
+ * libm call, once per sample for sine waveforms) is not. Truncation differs from
+ * floor for negative t, so bias by a whole number of periods first — cheaper than
+ * a branch and exact for the ranges reached here. */
+static inline float sfxr_sinf(float x) {
+    float t = x * (1024.0f / (2.0f * SFXR_PI)) + 1024.0f * 1024.0f;
+    int   i = (int)t;
+    float f = t - (float)i;
+    float a = sfxr_sin_lut[i & 1023];
+    return a + (sfxr_sin_lut[(i + 1) & 1023] - a) * f;
 }
 
 /* x^n for small integer n. Used once at reset to compound per-step ramps
@@ -239,7 +240,10 @@ static float sfxr_engine_tick(sfxr_state *s) {
 
         s->phase++;
         if (s->phase >= s->period) {
-            s->phase %= s->period;
+            /* phase advances by 1 per step and is tested every step, so it can
+             * only just have crossed period: one subtract is exact and replaces
+             * a runtime sdiv. */
+            s->phase -= s->period;
             if (p->wave_type == 3) {
                 int i;
                 for (i = 0; i < 32; i++)
@@ -262,7 +266,9 @@ static float sfxr_engine_tick(sfxr_state *s) {
             sample = sfxr_sinf(fp * 2.0f * SFXR_PI);
             break;
         case 3: /* noise */
-            sample = s->noise_buffer[(s->phase * 32 / s->period) & 31];
+            /* fp is phase/period already, so scaling it by 32 gives the same
+             * bucket as the integer division without a second runtime sdiv. */
+            sample = s->noise_buffer[(int)(fp * 32.0f) & 31];
             break;
         }
 

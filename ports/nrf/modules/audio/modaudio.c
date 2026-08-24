@@ -101,11 +101,38 @@ static audio_obj_t audio_obj;
 static uint32_t audio_seq;
 
 // ---------------------------------------------------------------------------
+// TEMPORARY instrumentation: measure how long audio_fill_buffer actually takes.
+// Reported per active-voice-count so one press and two stacked presses can be
+// compared. Remove once the synthesis budget is settled.
+// ---------------------------------------------------------------------------
+#define AUDIO_PROFILE (1)
+
+#if AUDIO_PROFILE
+static uint32_t prof_cycles_max[AUDIO_MAX_VOICES + 1];
+static uint32_t prof_cycles_sum[AUDIO_MAX_VOICES + 1];
+static uint32_t prof_calls[AUDIO_MAX_VOICES + 1];
+
+static void prof_init(void) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+#endif
+
+// ---------------------------------------------------------------------------
 // IRQ mixing: render each active voice and sum into the DMA buffer.
 // ---------------------------------------------------------------------------
 
 static void audio_fill_buffer(audio_obj_t *self, uint32_t *dst_words) {
     int16_t *dst = (int16_t *)dst_words;  // AUDIO_DMA_FRAMES stereo frames
+
+    #if AUDIO_PROFILE
+    uint32_t prof_t0 = DWT->CYCCNT;
+    int prof_active = 0;
+    for (int v = 0; v < AUDIO_MAX_VOICES; v++) {
+        if (self->voices[v].active) prof_active++;
+    }
+    #endif
 
     memset(dst, 0, AUDIO_DMA_FRAMES * 2 * sizeof(int16_t));
 
@@ -132,6 +159,15 @@ static void audio_fill_buffer(audio_obj_t *self, uint32_t *dst_words) {
             voice->active = false;
         }
     }
+
+    #if AUDIO_PROFILE
+    {
+        uint32_t dt = DWT->CYCCNT - prof_t0;
+        if (dt > prof_cycles_max[prof_active]) prof_cycles_max[prof_active] = dt;
+        prof_cycles_sum[prof_active] += dt;
+        prof_calls[prof_active]++;
+    }
+    #endif
 }
 
 static void audio_data_handler(nrfx_i2s_buffers_t const *p_released, uint32_t status) {
@@ -160,6 +196,10 @@ static void audio_hw_init(audio_obj_t *self) {
     if (self->initialized) {
         return;
     }
+
+    #if AUDIO_PROFILE
+    prof_init();
+    #endif
 
     // 32MHz/11 = 2.909 MHz, /128 = 22727 Hz (~22050), matches machine.I2S.
     nrfx_i2s_config_t cfg = {
@@ -242,6 +282,34 @@ static mp_obj_t audio_play(mp_obj_t params_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(audio_play_obj, audio_play);
 
+#if AUDIO_PROFILE
+// audio.stats() -> print measured audio_fill_buffer cost, then reset counters.
+// One line per active-voice-count: max/mean cycles, and what percentage of the
+// core that is given the handler must run once per buffer.
+static mp_obj_t audio_stats(void) {
+    // Cycles available between IRQs: AUDIO_DMA_FRAMES at the real I2S rate
+    // (32MHz/11/128 = 22727 Hz), times 64 MHz.
+    uint32_t budget = (uint32_t)((uint64_t)AUDIO_DMA_FRAMES * 64000000u / 22727u);
+    mp_printf(&mp_plat_print, "budget/buffer: %u cycles (%u us)\n",
+        (unsigned)budget, (unsigned)(budget / 64));
+    for (int n = 0; n <= AUDIO_MAX_VOICES; n++) {
+        if (prof_calls[n] == 0) {
+            continue;
+        }
+        uint32_t mean = prof_cycles_sum[n] / prof_calls[n];
+        mp_printf(&mp_plat_print,
+            "%d voice: max %u (%u%%)  mean %u (%u%%)  n=%u\n",
+            n,
+            (unsigned)prof_cycles_max[n], (unsigned)(prof_cycles_max[n] * 100 / budget),
+            (unsigned)mean, (unsigned)(mean * 100 / budget),
+            (unsigned)prof_calls[n]);
+        prof_cycles_max[n] = prof_cycles_sum[n] = prof_calls[n] = 0;
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(audio_stats_obj, audio_stats);
+#endif
+
 // audio.stop() -> silence all voices.
 static mp_obj_t audio_stop(void) {
     audio_obj_t *self = &audio_obj;
@@ -269,6 +337,9 @@ static MP_DEFINE_CONST_FUN_OBJ_0(audio_deinit_obj, audio_deinit);
 static const mp_rom_map_elem_t audio_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_audio) },
     { MP_ROM_QSTR(MP_QSTR_play), MP_ROM_PTR(&audio_play_obj) },
+    #if AUDIO_PROFILE
+    { MP_ROM_QSTR(MP_QSTR_stats), MP_ROM_PTR(&audio_stats_obj) },
+    #endif
     { MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&audio_stop_obj) },
     { MP_ROM_QSTR(MP_QSTR_deinit), MP_ROM_PTR(&audio_deinit_obj) },
 };
